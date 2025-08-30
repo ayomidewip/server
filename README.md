@@ -1,226 +1,632 @@
 # App Base Server
 
-A robust Node.js server with Express, MongoDB, and JWT authentication.
+A comprehensive Node.js server application featuring advanced file management, real-time collaboration, Redis caching, and robust authentication systems.
 
-## Features
+## 🚀 Features
 
-- **Authentication**: Complete JWT auth system with access and refresh tokens
-- **User Management**: CRUD operations for user accounts
-- **File System**: Advanced file management with version control, auto-save, and Redis caching
-- **Role-Based Permissions**: Hierarchical role system with granular permissions
-- **Validation**: Request validation with Joi
-- **Security**: Implementation of best practices for API security
-- **Error Handling**: Comprehensive error handling and logging
+### Core Systems
+- **Advanced Authentication**: JWT-based system with access/refresh tokens, 2FA support, and role-based access control
+- **File Management System**: Complete file CRUD with version control, auto-save, compression, and GridFS storage
+- **Real-time Collaboration**: WebSocket-powered collaborative editing using Yjs and Socket.IO
+- **Caching Layer**: Redis-powered caching with automatic invalidation and cleanup
+- **Email Service**: Template-based email system with SMTP support
+- **Comprehensive Logging**: Winston-based logging with MongoDB persistence and colorized console output
 
-## Requirements
+### Advanced Features
+- **File Compression**: Automatic file compression using Brotli, Gzip, and Deflate algorithms
+- **Storage Management**: Intelligent storage routing between inline and GridFS based on file characteristics
+- **Auto-save System**: Persistent auto-save with configurable intervals and cache-to-database synchronization
+- **Rate Limiting**: Configurable rate limiting for general and authentication endpoints
+- **Security**: Helmet, HPP, CORS protection with file upload security
+- **API Documentation**: Comprehensive REST API with filtering, pagination, and sorting
 
-- Node.js 18+ 
-- MongoDB 5+
-- npm or yarn
+## 📋 Requirements
 
-## Quick Start
+- **Node.js** 18+ (LTS recommended)
+- **MongoDB** 5+ (MongoDB Atlas or local installation)
+- **Redis** 6+ (Optional but recommended for optimal performance)
+- **npm** or **yarn**
 
-1. Clone the repository
-2. Install dependencies
-3. Configure environment variables
-4. Start the server
+## 🚀 Quick Start
+
+1. **Clone and Install**
+   ```bash
+   git clone <repository-url>
+   cd server
+   npm install
+   ```
+
+2. **Environment Setup**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration (see Environment Configuration section)
+   ```
+
+3. **Database Setup** (Optional - see Database Setup section)
+   ```bash
+   # MongoDB will create the database automatically when first accessed
+   # Redis setup instructions below for optimal performance
+   ```
+
+4. **Start Development Server**
+   ```bash
+   npm run dev
+   ```
+
+## ⚙️ Environment Configuration
+
+The application uses environment variables for configuration. Copy the example file and customize it:
 
 ```bash
-npm install
-npm run dev
+cp .env.example .env
 ```
 
-## Environment Setup
+### Key Configuration Requirements
 
-Create a `.env` file in the server directory. The following variables are **required**:
+1. **Generate Secure Secrets** (Required for JWT authentication):
+   ```bash
+   # Generate random secrets for JWT tokens
+   node -e "console.log('ACCESS_TOKEN_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
+   node -e "console.log('REFRESH_TOKEN_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
+   ```
 
+2. **Database Connection** (Required):
+   ```bash
+   # Local MongoDB
+   MONGODB_URI=mongodb://localhost:27017/app-base-db
+   
+   # MongoDB Atlas (cloud)
+   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/app-base-db
+   ```
+
+3. **Redis Connection** (Optional but recommended):
+   ```bash
+   # Default Redis connection
+   REDIS_HOST=localhost
+   REDIS_PORT=6379
+   CACHE_ENABLED=true
+   ```
+
+All configuration options are documented in the `.env.example` file with descriptions and default values.
+
+## 📊 Redis Setup (Optional but Recommended)
+
+Redis provides caching capabilities that significantly improve API performance and enable advanced features like auto-save persistence and cache cleanup services.
+
+### Quick Setup Options
+
+- **Local Development**: Follow the [official Redis installation guide](https://redis.io/docs/getting-started/installation/) for your platform
+- **Docker**: `docker run -d --name redis -p 6379:6379 redis:alpine`
+- **Cloud Services**: [Redis Cloud](https://redis.com/redis-enterprise-cloud/), [AWS ElastiCache](https://aws.amazon.com/elasticache/), [DigitalOcean Managed Redis](https://www.digitalocean.com/products/managed-databases)
+
+### Configuration
+
+Update your `.env` file:
 ```bash
-# Server Configuration (Required)
-PORT=8080                                     # Server port
-NODE_ENV=development                          # Environment (development/production/test)
-MONGODB_URI=mongodb://localhost:27017/app-base-db  # MongoDB connection URI
-ALLOWED_ORIGINS=http://localhost:8080,http://localhost:8083  # CORS allowed origins
+# Local Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+CACHE_ENABLED=true
 
-# Authentication (Required)
-ACCESS_TOKEN_SECRET=your_access_token_secret   # JWT access token secret
-REFRESH_TOKEN_SECRET=your_refresh_token_secret # JWT refresh token secret
-ACCESS_TOKEN_EXPIRY=15m                       # JWT access token expiry
-REFRESH_TOKEN_EXPIRY=7d                       # JWT refresh token expiry
-
-# Logging Configuration (Optional)
-LOG_LEVEL=info                                # Log level (error, warn, info, http, debug)
-LOG_REQUESTS=true                             # Enable HTTP request logging
-LOG_OVERRIDE=true                             # Redirect console methods to Winston
+# Remote Redis (with authentication)
+REDIS_HOST=your.remote.redis.server.com
+REDIS_PORT=6379
+REDIS_PASSWORD=your_secure_password
+CACHE_ENABLED=true
 ```
 
-To generate secure random tokens for JWT:
-
+### Verification
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+redis-cli ping  # Should return: PONG
+npm run dev     # Check for Redis connection logs
 ```
 
-## Logging System
 
-The server uses Winston for structured logging with customizable log levels:
+## 🗄️ Database Setup
 
-### Log Levels (in order of priority)
+### MongoDB Installation
 
-1. **error** (highest priority)
-   - Critical failures requiring immediate attention
-   - Displayed with red background (🔴) and ❌ icon
-   - Example: Database connection failures, unhandled exceptions
+Follow the [official MongoDB installation guide](https://www.mongodb.com/docs/manual/installation/) for your platform:
 
-2. **warn**
-   - Concerning issues that aren't critical failures
-   - Displayed with yellow background (🟡) and ⚠️ icon
-   - Example: Deprecated feature usage, validation warnings
+- **Windows**: [MongoDB Community Edition Installation](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-windows/)
+- **macOS**: [Install with Homebrew](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-os-x/) or [Manual Installation](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-os-x-tarball/)
+- **Linux**: [Ubuntu/Debian](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-ubuntu/), [Red Hat/CentOS](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-red-hat/), [SUSE](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-suse/)
 
-3. **info** (default)
-   - General operational information
-   - Displayed with green background (🟢) and ℹ️ icon
-   - Example: Server startup, successful connections
-
-4. **http**
-   - HTTP request/response logging
-   - Displayed with magenta color (🟣) and 📡 icon
-   - HTTP methods have specific icons: GET (🔍), POST (📤), PUT (📝), etc.
-
-5. **debug** (lowest priority)
-   - Detailed debugging information for troubleshooting
-   - Displayed with cyan color (🔵) and ✨ icon
-   - Example: Variable values, function call traces
-
-Setting a log level in `.env` displays that level and all higher priority levels. For instance, setting `LOG_LEVEL=info` will show error, warn, and info logs, but not http or debug logs.
-
-### Additional Logging Features
-
-- **Console Override**: When `LOG_OVERRIDE=true`, standard console methods are redirected to Winston
-- **HTTP Logging**: Set `LOG_REQUESTS=true` to log detailed information about HTTP requests
-- **Database Logging**: HTTP logs are stored in MongoDB for audit purposes
-
-## MongoDB Setup
-
-### Installation
-
-#### Windows
-1. Download MongoDB Community Server from [MongoDB website](https://www.mongodb.com/try/download/community)
-2. Run installer and follow the prompts
-3. Choose "Complete" installation
-4. Check "Install MongoDB as a Service"
-
-#### macOS
+### Quick Setup
 ```bash
-brew tap mongodb/brew
-brew install mongodb-community
+# Verify MongoDB is running
+mongosh
+
+# Create database and user (optional)
+use app-base-db
+db.createUser({
+  user: "appbaseuser", 
+  pwd: "your_secure_password",
+  roles: [{ role: "readWrite", db: "app-base-db" }]
+})
 ```
 
-#### Linux (Ubuntu)
+### Configuration Examples
 ```bash
-wget -qO - https://www.mongodb.org/static/pgp/server-5.0.asc | sudo apt-key add -
-echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/5.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-5.0.list
-sudo apt update
-sudo apt install -y mongodb-org
-sudo systemctl start mongod
-sudo systemctl enable mongod
+# Local MongoDB
+MONGODB_URI=mongodb://localhost:27017/app-base-db
+
+# With authentication
+MONGODB_URI=mongodb://appbaseuser:password@localhost:27017/app-base-db
+
+# MongoDB Atlas (cloud)
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/app-base-db
 ```
 
-### Setting up MongoDB Compass
+### Tools
+- **[MongoDB Compass](https://www.mongodb.com/products/compass)**: GUI for database management
+- **[MongoDB Atlas](https://www.mongodb.com/atlas)**: Managed cloud MongoDB service
 
-1. Download MongoDB Compass from [MongoDB Compass website](https://www.mongodb.com/products/compass)
-2. Install MongoDB Compass
-3. Open MongoDB Compass
-4. Connect to your MongoDB instance:
-   - For local development, use: `mongodb://localhost:27017`
-   - For remote instances, use the connection string from your MongoDB provider
+## 📧 Email Service Setup
 
-### Creating the Database
+The application includes a comprehensive email system with template support.
 
-1. In MongoDB Compass, click "Create Database"
-2. Enter database name: `app-base-db`
-3. Create an initial collection: `users`
+### Quick SMTP Configuration
 
-### Database Connection
+#### Gmail (Recommended for Development)
+```bash
+# .env configuration
+EMAIL_ENABLED=true
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your-gmail@gmail.com
+EMAIL_PASS=your_app_password  # Generate App Password in Google Account Settings
+EMAIL_FROM=noreply@yourapp.com
+```
 
-1. Ensure your `.env` file has the correct `MONGODB_URI` pointing to your database
-2. The server will automatically connect to the database on startup
-3. Check the console logs for successful connection
+#### Other Providers
+```bash
+# Outlook/Hotmail
+EMAIL_HOST=smtp-mail.outlook.com
+EMAIL_PORT=587
 
-## API Routes
+# Yahoo Mail
+EMAIL_HOST=smtp.mail.yahoo.com
+EMAIL_PORT=587
+```
 
-### Authentication
-- `POST /api/v1/auth/signup` - Register a new user
-- `POST /api/v1/auth/login` - Authenticate a user
-- `POST /api/v1/auth/refresh-token` - Refresh the access token
-- `GET /api/v1/auth/me` - Get the current user's profile
-- `POST /api/v1/auth/forgot-password` - Request a password reset
-- `POST /api/v1/auth/reset-password/:token` - Reset password with token
+### Features
+- **Template System**: Handlebars-based responsive email templates
+- **Test Endpoints**: `/api/v1/email/test` and `/api/v1/email/template/render`
+- **Built-in Templates**: Welcome, verification, password reset, security alerts
+- **Variables**: `{{firstName}}`, `{{email}}`, `{{appName}}`, `{{appUrl}}`, `{{resetUrl}}`
+
+## 📁 Advanced File System
+
+### File Storage Architecture
+
+The application uses intelligent storage routing:
+
+- **Inline Storage**: Small text files stored directly in MongoDB documents
+- **GridFS Storage**: Large files and binary content stored in MongoDB GridFS
+- **Automatic Detection**: Storage type determined by file size and MIME type
+
+### File Compression
+
+Automatic compression using multiple algorithms:
+- **Brotli**: Best compression ratio (priority 1)
+- **Gzip**: Good compatibility (priority 2)
+- **Deflate**: Fallback option (priority 3)
+
+Configuration:
+```bash
+COMPRESSION_MIN_SIZE=1024      # Minimum file size for compression
+COMPRESSION_MIN_RATIO=0.05     # Minimum space savings required
+```
+
+### Supported File Types
+
+The system supports extensive file type detection:
+- **Text**: txt, md, log, csv
+- **Code**: js, ts, jsx, tsx, py, java, cpp, css, html, json
+- **Config**: ini, conf, env, toml, yaml
+- **Documentation**: md, rst, adoc, tex
+- **Web**: html, css, js, vue, svelte
+- **Binary**: pdf, docx, xlsx, images, etc.
+
+### File Security
+
+- **Upload Filtering**: Configurable blocked file extensions
+- **Path Validation**: Prevents directory traversal attacks
+- **MIME Type Validation**: Validates file content matches extension
+- **Size Limits**: Configurable upload size limits (default 500MB)
+
+## 🔄 Real-time Collaboration
+
+### WebSocket-based Collaborative Editing
+
+The application uses **Socket.IO** with **Yjs** for real-time collaborative editing:
+
+- **Yjs Integration**: Conflict-free replicated data types (CRDTs) for operational transformation
+- **MongoDB Persistence**: Collaborative documents stored using `y-mongodb-provider`
+- **WebSocket Server**: Socket.IO server for real-time communication
+- **Presence Awareness**: Track and display active collaborators per file
+- **Access Control**: JWT-based authentication for WebSocket connections
+
+### WebSocket Connection
+
+```javascript
+// Client-side connection example
+const socket = io('http://localhost:8080', {
+  auth: { token: 'your-jwt-token' }
+});
+
+// Join a file collaboration session
+socket.emit('join-file', { fileId: 'file-id' });
+
+// Listen for document updates
+socket.on('document-update', (update) => {
+  // Handle Yjs document updates
+});
+```
+
+### API Endpoints
+
+```http
+GET  /api/v1/files/:filePath/collaborators  # Get active collaborators
+POST /api/v1/files/:fileId/sync            # Sync collaborative document
+```
+
+## 🔐 Advanced Authentication
+
+### JWT Token System
+
+- **Access Tokens**: Short-lived (20 minutes default) for API access
+- **Refresh Tokens**: Long-lived (7 days default) for token renewal
+- **Token Blacklisting**: Secure logout with Redis-backed token invalidation
+- **Auto-renewal**: Automatic token refresh for seamless user experience
+
+### Two-Factor Authentication (2FA)
+
+- **TOTP Support**: Time-based one-time passwords using Speakeasy
+- **QR Code Generation**: Easy setup with authenticator apps
+- **Recovery Codes**: Backup codes for account recovery
+
+### Role-Based Access Control
+
+Five hierarchical roles with granular permissions:
+
+1. **OWNER**: Complete system control
+2. **ADMIN**: Administrative privileges (cannot delete users)
+3. **SUPER_CREATOR**: Extended creation and management rights
+4. **CREATOR**: Basic content creation rights
+5. **USER**: Personal account management only
+
+### Security Features
+
+- **Rate Limiting**: Separate limits for general API and authentication endpoints
+- **Password Complexity**: Enforced strong password requirements
+- **Account Lockout**: Protection against brute force attacks
+- **Security Alerts**: Email notifications for suspicious login activity
+
+## 🛠️ Logging System
+
+The server uses Winston for advanced structured logging with colorized output and MongoDB persistence.
+
+### Log Levels (Priority Order)
+
+1. **error** (🔴 ❌) - Critical failures requiring immediate attention
+2. **warn** (🟡 ⚠️) - Concerning issues that aren't critical failures  
+3. **info** (🟢 ℹ️) - General operational information (default)
+4. **http** (🟣 📡) - HTTP request/response logging with method-specific icons
+5. **debug** (🔵 ✨) - Detailed debugging information for troubleshooting
+
+Setting `LOG_LEVEL=info` shows info, warn, and error logs. Setting `LOG_LEVEL=debug` shows all log levels.
+
+### Logging Features
+
+- **Colorized Console**: Beautiful colored output with emojis and formatting
+- **Database Persistence**: HTTP requests automatically stored in MongoDB
+- **Request Logging**: Comprehensive request/response logging with timing
+- **Log Aggregation**: Query and analyze logs through API endpoints
+- **Console Override**: Redirect console.log to Winston when `LOG_OVERRIDE=true`
+
+### Log Configuration
+```bash
+LOG_LEVEL=http          # Set minimum log level
+LOG_REQUESTS=true       # Enable HTTP request logging  
+LOG_OVERRIDE=true       # Redirect console methods to Winston
+```
+
+## 🚀 API Documentation
+
+### Authentication Endpoints
+```http
+POST /api/v1/auth/signup          # Register new user
+POST /api/v1/auth/login           # User login with credentials
+POST /api/v1/auth/refresh-token   # Refresh access token
+POST /api/v1/auth/logout          # Secure logout (blacklist tokens)
+GET  /api/v1/auth/me             # Get current user profile
+POST /api/v1/auth/forgot-password # Request password reset
+POST /api/v1/auth/reset-password/:token # Reset password with token
+
+# Two-Factor Authentication
+POST /api/v1/auth/2fa/setup       # Setup 2FA with QR code
+POST /api/v1/auth/2fa/verify      # Verify 2FA token
+POST /api/v1/auth/2fa/disable     # Disable 2FA
+```
 
 ### User Management
-- `GET /api/v1/users` - Get all users (admin only)
-- `GET /api/v1/users/:id` - Get a specific user
-- `POST /api/v1/users` - Create a new user (admin only)
-- `PUT /api/v1/users/:id` - Update a user
-- `DELETE /api/v1/users/:id` - Delete a user
-- `PATCH /api/v1/users/:id/change-password` - Change user password
+```http
+GET    /api/v1/users              # Get all users (admin only)
+POST   /api/v1/users              # Create user (admin only)
+GET    /api/v1/users/:id          # Get specific user
+PUT    /api/v1/users/:id          # Update user profile
+DELETE /api/v1/users/:id          # Delete user
+PATCH  /api/v1/users/:id/change-password # Change password
+GET    /api/v1/users/:id/stats    # Get user statistics
+```
 
-### File System
-- `GET /api/v1/files` - Get list of files with filtering and pagination
-- `POST /api/v1/files` - Create a new file
-- `GET /api/v1/files/:id` - Get file metadata
-- `PUT /api/v1/files/:id` - Update file metadata
-- `DELETE /api/v1/files/:id` - Delete file or specific version
-- `GET /api/v1/files/:id/content` - Get file content
-- `PUT /api/v1/files/:id/autosave` - Auto-save file content to cache
-- `POST /api/v1/files/:id/save` - Save file content as new version
-- `GET /api/v1/files/:id/versions` - Get all versions of a file
-- `GET /api/v1/files/types` - Get supported file types
+### Advanced File System
+```http
+# File Operations
+GET    /api/v1/files              # List files with filtering/pagination
+POST   /api/v1/files              # Create new file
+GET    /api/v1/files/:filePath    # Get file metadata
+PUT    /api/v1/files/:filePath    # Update file metadata  
+DELETE /api/v1/files/:filePath    # Delete file/version
+GET    /api/v1/files/:filePath/content # Get file content
+PUT    /api/v1/files/:filePath/autosave # Auto-save to cache
+POST   /api/v1/files/:filePath/save # Save as new version
+POST   /api/v1/files/:filePath/publish # Publish current content
 
-## Role-Based Permissions
+# File Versions
+GET    /api/v1/files/:filePath/versions # Get all versions
+DELETE /api/v1/files/:filePath/versions/:version # Delete version
 
-The system includes five roles with hierarchical permissions:
+# File Upload
+POST   /api/v1/files/upload       # Upload single file
+POST   /api/v1/files/upload-multiple # Upload multiple files
 
-1. `OWNER`: Can do everything including deleting users
-2. `ADMIN`: Can do everything except deleting users
-3. `SUPER_CREATOR`: Extended creation privileges
-4. `CREATOR`: Basic creation privileges
-5. `USER`: Can only manage their own account
+# File Management  
+GET    /api/v1/files/types        # Get supported file types
+GET    /api/v1/files/stats        # File storage statistics
+GET    /api/v1/files/compression/stats # Compression statistics (admin)
+GET    /api/v1/files/admin/stats  # Admin file statistics
+GET    /api/v1/files/autosave/status # Auto-save service status (admin)
+POST   /api/v1/files/bulk         # Bulk operations
+POST   /api/v1/files/directory    # Create directory
+GET    /api/v1/files/tree         # Get file tree structure
+GET    /api/v1/files/access/:accessType # Get files by access type
+GET    /api/v1/files/directory/:dirPath/contents # Directory contents
+GET    /api/v1/files/directory/:dirPath/stats # Directory statistics
 
-## Development
+# File Operations
+PUT    /api/v1/files/:filePath/move # Move file/directory
+POST   /api/v1/files/:filePath/copy # Copy file/directory
+GET    /api/v1/files/:filePath/download # Download file
+GET    /api/v1/files/:filePath/info # Get file MIME info
 
-Start the server in development mode:
+# Collaboration & Real-time Editing
+GET    /api/v1/files/:filePath/collaborators # Active collaborators
+POST   /api/v1/files/:fileId/sync # Sync collaborative document
 
+# WebSocket Endpoints (Socket.IO)
+# Connect to: ws://localhost:8080/socket.io/ with JWT token
+# Events: 'join-file', 'document-update', 'cursor-position', 'user-presence'
+```
+
+### File Sharing & Permissions
+```http
+GET    /api/v1/files/:filePath/share # Get sharing info
+POST   /api/v1/files/:filePath/share # Share with users
+DELETE /api/v1/files/:filePath/share # Remove sharing
+```
+
+### Cache Management
+```http
+GET    /api/v1/cache/stats        # Cache statistics
+DELETE /api/v1/cache/clear        # Clear cache (admin)
+GET    /api/v1/cache/keys         # List cache keys (admin)
+DELETE /api/v1/cache/keys/:key    # Delete specific key (admin)
+```
+
+### Application Management
+```http
+GET    /api/v1/health             # Health check
+GET    /api/v1/stats/overview     # System statistics (admin)
+GET    /api/v1/logs               # Application logs (admin)
+DELETE /api/v1/logs               # Clear logs (admin)
+
+# Email Testing (Admin)
+POST   /api/v1/email/template/render # Preview email template
+POST   /api/v1/email/test         # Send test email
+```
+
+### Query Parameters
+
+#### File Listing (`GET /api/v1/files`)
+```http
+?page=1&limit=20                  # Pagination
+&sortBy=updatedAt&sortOrder=desc  # Sorting
+&search=filename                  # Search in filename/content
+&type=file                        # Filter by type (file/directory)
+&mimeType=text/plain             # Filter by MIME type
+&tags=important,project          # Filter by tags
+&minSize=1024&maxSize=1048576    # Size filtering
+&owner=true                      # Show only owned files
+&shared=true                     # Show only shared files
+```
+
+#### User Listing (`GET /api/v1/users`)
+```http
+?page=1&limit=20                 # Pagination
+&sortBy=createdAt&sortOrder=asc  # Sorting  
+&search=john                     # Search users
+&role=ADMIN                      # Filter by role
+&active=true                     # Filter by status
+&fields=id,username,email,roles  # Select specific fields
+```
+
+## 🔧 Development
+
+### Available Scripts
 ```bash
+npm run dev        # Start development server with nodemon
+npm start          # Start production server
+npm test           # Run test suite with Jest
+```
+
+### Project Structure
+```
+server/
+├── config/          # Database and user rights configuration
+│   ├── db.js        # MongoDB connection and GridFS utilities
+│   └── rights.js    # User roles and permissions system
+├── controllers/     # Request handlers and business logic
+│   ├── app.controller.js    # Health, stats, and system endpoints
+│   ├── auth.controller.js   # Authentication and 2FA
+│   ├── cache.controller.js  # Cache management and cleanup
+│   ├── file.controller.js   # File operations and collaboration
+│   └── user.controller.js   # User management
+├── middleware/      # Express middleware functions
+│   ├── app.middleware.js      # Core middleware and Redis client
+│   ├── auth.middleware.js     # JWT and permission checking
+│   ├── cache.middleware.js    # Response caching and invalidation
+│   ├── error.middleware.js    # Global error handling
+│   ├── file.middleware.js     # File upload and compression
+│   ├── user.middleware.js     # User validation middleware
+│   └── validation.middleware.js # Request validation with Joi
+├── models/          # MongoDB schemas and data models
+│   ├── file.model.js   # File schema with GridFS support
+│   ├── log.model.js    # Request logging schema
+│   ├── schemas.js      # Joi validation schemas
+│   └── user.model.js   # User schema with roles/permissions
+├── routes/          # API route definitions
+│   ├── app.routes.js    # System routes (health, logs, email)
+│   ├── auth.routes.js   # Authentication endpoints
+│   ├── cache.routes.js  # Cache management endpoints
+│   ├── file.routes.js   # File system and collaboration
+│   └── user.routes.js   # User management endpoints
+├── templates/       # Email templates (Handlebars)
+│   └── emails/      # Email template files
+├── utils/           # Utility functions and helpers
+│   ├── app.logger.js  # Winston logging with colorized output
+│   ├── sanitize.js    # HTML sanitization utilities
+│   └── validator.js   # Custom validation functions
+├── .env.example     # Environment variables template
+├── index.js         # Application entry point
+├── server.js        # Server class with WebSocket support
+└── package.json     # Dependencies and npm scripts
+```
+
+### Key Features Implementation
+
+#### Auto-save System
+- Files cached in Redis during editing
+- Configurable persistence interval (default: 5 minutes)
+- Automatic synchronization to MongoDB
+- Conflict detection for concurrent edits
+
+#### Caching Strategy  
+- Response caching with automatic invalidation
+- Entity-based cache keys with dependency tracking
+- TTL-based expiration with cleanup service
+- Cache warming for frequently accessed data
+
+#### File Compression
+- Automatic compression for eligible files
+- Multiple algorithm support (Brotli, Gzip, Deflate)
+- Intelligent storage routing based on compression results
+- Configurable compression thresholds
+
+## 🚢 Production Deployment
+
+### Environment Configuration
+```bash
+NODE_ENV=production
+LOG_LEVEL=warn
+CACHE_ENABLED=true
+EMAIL_ENABLED=true
+# Use strong random secrets in production
+ACCESS_TOKEN_SECRET=your_production_access_secret
+REFRESH_TOKEN_SECRET=your_production_refresh_secret
+```
+
+### Performance Recommendations
+
+1. **MongoDB Optimization**:
+   - Use MongoDB Atlas or properly configured replica set
+   - Enable connection pooling
+   - Create appropriate indexes for file paths and user queries
+   - Configure GridFS for large file storage
+
+2. **Redis Optimization**:
+   - Configure memory limits and eviction policies
+   - Use Redis persistence for important cache data
+   - Monitor Redis memory usage
+   - Set up Redis clustering for high availability
+
+3. **WebSocket/Socket.IO Scaling**:
+   - Use Redis adapter for Socket.IO clustering
+   - Configure sticky sessions for load balancing
+   - Monitor WebSocket connection limits
+   - Implement connection pooling for Yjs documents
+
+4. **Security Hardening**:
+   - Use HTTPS/TLS in production
+   - Configure proper CORS origins for both HTTP and WebSocket
+   - Enable rate limiting for both API and WebSocket connections
+   - Regular security updates and dependency scanning
+
+5. **Monitoring & Observability**:
+   - Set up log aggregation with structured logging
+   - Monitor application metrics and WebSocket connections
+   - Configure health check endpoints
+   - Track collaborative document usage and performance
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+#### Database Connection Failed
+```bash
+# Check MongoDB status
+mongosh mongodb://localhost:27017/app-base-db
+```
+
+#### Redis Connection Issues
+```bash
+# Check Redis status
+redis-cli ping
+```
+
+#### Email Service Not Working
+```bash
+# Check email configuration in logs
 npm run dev
 ```
 
-## Production Deployment
-
-For production deployment, update environment variables and start with:
-
+#### WebSocket/Collaboration Issues
 ```bash
-NODE_ENV=production npm start
+# Test WebSocket connection
+LOG_LEVEL=debug npm run dev
 ```
 
-## Security Considerations
+### Debug Mode
+```bash
+LOG_LEVEL=debug npm run dev
+```
 
-The server implements:
-- CORS protection
-- Rate limiting
-- Data sanitization
-- JWT authentication
-- Password hashing
-- Input validation
-- Error handling
+For detailed troubleshooting guides, see:
+- [MongoDB Troubleshooting](https://www.mongodb.com/docs/manual/faq/diagnostics/)
+- [Redis Troubleshooting](https://redis.io/docs/getting-started/faq/)
+- [Node.js Troubleshooting](https://nodejs.org/en/docs/guides/debugging-getting-started)
 
-## Troubleshooting
+## 📄 License
 
-### Connection Issues
-- Verify MongoDB is running: `systemctl status mongod` (Linux) or through Services (Windows)
-- Check MongoDB connection string in `.env`
-- Ensure network allows connections to MongoDB port (27017 by default)
+[Add your license information here]
 
-### Authentication Issues
-- Verify token secrets in `.env`
-- Check token expiration settings
-- Clear cookies and local storage in browser
+## 🤝 Contributing
+
+[Add contributing guidelines here]
+
+---
+
+**Built with ❤️ using Node.js, Express, MongoDB, and Redis**
 

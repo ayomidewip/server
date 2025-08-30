@@ -257,9 +257,18 @@ class Server {
     }
 
     /**
+     * Get database connection instance
+     * @returns {Object} Mongoose connection
+     */
+    getDbConnection() {
+        return mongoose.connection;
+    }
+
+    /**
      * Initialize email service
      * @returns {Promise<void>}
-     */  async initializeEmailService() {
+     */  
+    async initializeEmailService() {
         try {
             const {initializeEmailService} = require('./controllers/app.controller');
             logger.info('📧 Initializing email service...');
@@ -520,8 +529,10 @@ module.exports = {
     stop: () => serverInstance.stop(),
     getApp: () => serverInstance.getApp(),
     getServer: () => serverInstance.getServer(),
-    getConfig: () => serverInstance.getConfig(), isRedisConnected: () => serverInstance.isRedisConnected(),
+    getConfig: () => serverInstance.getConfig(), 
+    isRedisConnected: () => serverInstance.isRedisConnected(),
     getRedisClient: () => serverInstance.getRedisClient(),
+    getDbConnection: () => serverInstance.getDbConnection(),
     isEmailReady: () => appMiddleware.isEmailReady(),
     getEmailTransporter: () => appMiddleware.getEmailTransporter()
 };

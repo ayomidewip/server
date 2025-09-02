@@ -7,11 +7,11 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
-const {ROLES, requiresOwnerApproval, isOwner} = require('../config/rights');
+const {requiresOwnerApproval} = require('../config/rights');
 const logger = require('../utils/app.logger');
 const {cache} = require('../middleware/cache.middleware');
 const {sanitizeObject} = require('../utils/sanitize');
-const {loadTemplate, sendEmail, getEmailTransporter} = require('./app.controller');
+const {sendEmail, getEmailTransporter} = require('./app.controller');
 
 /**
  * Helper function to normalize user roles

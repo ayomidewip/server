@@ -4,14 +4,10 @@ const {AppError} = require('../middleware/error.middleware');
 const {hasRight, RIGHTS} = require('../config/rights');
 const {cache} = require('../middleware/cache.middleware');
 const logger = require('../utils/app.logger');
-const {sanitizeObject, sanitizeHtmlInObject} = require('../utils/sanitize');
+const {sanitizeHtmlInObject} = require('../utils/sanitize');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
-const {GridFSBucket} = require('mongodb');
-const path = require('path');
-const {Readable} = require('stream');
-const mime = require('mime-types');
-const {parseFilters, applyFiltersToAggregation, getFilterSummary, getGridFSStorageStats} = require('./app.controller');
+const {parseFilters, getFilterSummary} = require('./app.controller');
 
 // Collaboration imports
 const { setupWSConnection } = require('@y/websocket-server/utils');

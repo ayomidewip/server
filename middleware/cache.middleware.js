@@ -24,8 +24,7 @@ const cache = {
         try {
             const redisClient = getRedisClient();
             const data = await redisClient.get(key);
-            const result = data ? JSON.parse(data) : null;
-            return result;
+            return data ? JSON.parse(data) : null;
         } catch (err) {
             logger.error(`${logger.safeColor(logger.colors.red)}[Cache]${logger.safeColor(logger.colors.reset)} Redis GET error:`, err);
             return null;
@@ -40,8 +39,7 @@ const cache = {
 
         try {
             const redisClient = getRedisClient();
-            const result = await redisClient.setEx(key, expiration, JSON.stringify(value));
-            return result;
+            return await redisClient.setEx(key, expiration, JSON.stringify(value));
         } catch (err) {
             logger.error(`${logger.safeColor(logger.colors.red)}[Cache]${logger.safeColor(logger.colors.reset)} Redis SET error:`, err);
         }
@@ -71,8 +69,7 @@ const cache = {
 
         try {
             const redisClient = getRedisClient();
-            const result = await redisClient.flushDb();
-            return result;
+            return await redisClient.flushDb();
         } catch (err) {
             logger.error(`${logger.safeColor(logger.colors.red)}[Cache]${logger.safeColor(logger.colors.reset)} Redis FLUSH error:`, err);
         }
@@ -121,8 +118,7 @@ const cache = {
 
         try {
             const redisClient = getRedisClient();
-            const result = await redisClient.del(keys);
-            return result;
+            return await redisClient.del(keys);
         } catch (err) {
             logger.error(`${logger.safeColor(logger.colors.red)}[Cache]${logger.safeColor(logger.colors.reset)} Redis MULTIPLE DELETE error:`, err);
             return 0;

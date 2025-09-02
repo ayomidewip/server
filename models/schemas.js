@@ -1,4 +1,4 @@
-const {Joi, objectId, password, filePath} = require('../utils/validator');
+const {Joi, password} = require('../utils/validator');
 const {ROLES} = require('../config/rights');
 
 // Get all valid roles as an array for validation

@@ -9,7 +9,6 @@ const {
     RIGHTS,
     ROLES,
     canAssignRole,
-    requiresOwnerApproval,
     getElevatedRoles,
     isOwner
 } = require('../config/rights');

@@ -4,7 +4,7 @@ const authMiddleware = require('../middleware/auth.middleware');
 const {validateRequest} = require('../middleware/validation.middleware');
 const {fileSchemas, fileParamSchemas} = require('../models/schemas');
 const {cacheResponse, clearCache, autoInvalidateCache} = require('../middleware/cache.middleware');
-const {ROLES, RIGHTS} = require('../config/rights');
+const {RIGHTS} = require('../config/rights');
 
 // Define file routes for validation
 router.validRoutes = [

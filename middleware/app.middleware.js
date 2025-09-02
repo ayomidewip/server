@@ -2,7 +2,6 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const hpp = require('hpp');
 const cors = require('cors');
-const { AppError } = require('./error.middleware');
 const express = require('express');
 const logger = require('../utils/app.logger');
 const redis = require('redis');

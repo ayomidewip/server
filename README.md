@@ -618,10 +618,6 @@ For detailed troubleshooting guides, see:
 - [Redis Troubleshooting](https://redis.io/docs/getting-started/faq/)
 - [Node.js Troubleshooting](https://nodejs.org/en/docs/guides/debugging-getting-started)
 
-## 📄 License
-
-[Add your license information here]
-
 ## 🤝 Contributing
 
 [Add contributing guidelines here]

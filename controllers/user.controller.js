@@ -7,7 +7,7 @@ const {normalizeRoles} = require('../middleware/user.middleware');
 const {cache} = require('../middleware/cache.middleware');
 const logger = require('../utils/app.logger');
 const {sanitizeObject, sanitizeHtmlInObject} = require('../utils/sanitize'); // Import sanitize functions
-const {parseFilters, applyFilters, getFilterSummary} = require('./app.controller');
+const {parseFilters, getFilterSummary} = require('./app.controller');
 
 // Helper function to format user response
 const formatUserResponse = (user) => {

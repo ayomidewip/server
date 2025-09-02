@@ -2,7 +2,6 @@ const multer = require('multer');
 const path = require('path');
 const zlib = require('zlib');
 const {promisify} = require('util');
-const {storeInGridFS} = require('../config/db');
 const File = require('../models/file.model');
 const logger = require('../utils/app.logger');
 

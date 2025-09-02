@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 const mime = require('mime-types');
-const crypto = require('crypto');
 const {storeInGridFS, retrieveFromGridFS, deleteFromGridFS} = require('../config/db');
 
 /**

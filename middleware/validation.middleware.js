@@ -1,6 +1,4 @@
 // middlewares/validation.middleware.js
-const validator = require('validator');
-const {AppError} = require('./error.middleware');
 const logger = require('../utils/app.logger');
 
 const validateRequest = (schema, payloadLocation = 'body') => {

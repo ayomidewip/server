@@ -1,7 +1,6 @@
 const router = require('express').Router();
 const authController = require('../controllers/auth.controller');
 const authMiddleware = require('../middleware/auth.middleware');
-const userMiddleware = require('../middleware/user.middleware');
 const {validateRequest} = require('../middleware/validation.middleware');
 const {authSchemas, twoFactorSchemas, emailVerificationSchemas} = require('../models/schemas');
 const {ROLES, RIGHTS} = require('../config/rights');

@@ -326,6 +326,13 @@ Setting `LOG_LEVEL=info` shows info, warn, and error logs. Setting `LOG_LEVEL=de
 - **Log Aggregation**: Query and analyze logs through API endpoints
 - **Console Override**: Redirect console.log to Winston when `LOG_OVERRIDE=true`
 
+### Log Types
+
+**HTTP Requests**: Traditional REST API calls logged with method-specific icons
+```
+📡 HTTP GET /api/v1/users 200 ✅ 45.23ms [ObjectId]
+```
+
 ### Log Configuration
 ```bash
 LOG_LEVEL=http          # Set minimum log level
@@ -380,8 +387,7 @@ GET    /api/v1/files/:filePath/versions # Get all versions
 DELETE /api/v1/files/:filePath/versions/:version # Delete version
 
 # File Upload
-POST   /api/v1/files/upload       # Upload single file
-POST   /api/v1/files/upload-multiple # Upload multiple files
+POST   /api/v1/files/upload       # Upload single or multiple files
 
 # File Management  
 GET    /api/v1/files/types        # Get supported file types

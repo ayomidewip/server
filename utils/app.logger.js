@@ -27,6 +27,7 @@ const colors = {
     warn: '\x1b[33m',    // yellow
     info: '\x1b[36m',    // cyan
     http: '\x1b[35m',    // magenta
+    websocket: '\x1b[94m', // bright blue
     debug: '\x1b[32m',   // green
     reset: '\x1b[0m',    // reset
     bold: '\x1b[1m',     // bold
@@ -47,6 +48,7 @@ const customLevels = {
     warn: 1,
     info: 2,
     http: 3,
+    websocket: 3, // Same priority as HTTP
     verbose: 4,
     debug: 5,
     silly: 6
@@ -58,6 +60,7 @@ winston.addColors({
     warn: 'yellow',
     info: 'cyan',
     http: 'magenta',
+    websocket: 'blue',
     verbose: 'blue',
     debug: 'green',
     silly: 'grey'
@@ -69,6 +72,7 @@ const icons = {
     warn: '\u26A0\uFE0F', // ⚠️
     info: '\u2139\uFE0F', // ℹ️
     http: '\uD83D\uDCE1', // 📡
+    websocket: '\uD83D\uDD0C', // 🔌
     verbose: '\uD83D\uDD0D', // 🔍
     debug: '\u2728', // ✨
     silly: '\uD83E\uDD13', // 🤓
@@ -85,7 +89,7 @@ function safeColor(color) {
  * @param {string} text - Text to convert to ASCII art (defaults to APP_NAME from env)
  * @returns {Promise<string>} ASCII art banner with color formatting
  */
-function generateBanner(text = process.env.APP_NAME || 'APP-BASE') {
+function generateBanner(text = process.env.APP_NAME) {
     return new Promise((resolve, reject) => {
         figlet.text(text, {
             font: 'AMC Neko', // Use a fun font: Fraktur
@@ -177,7 +181,7 @@ class DatabaseTransport extends winston.Transport {
             // Prepare log data for database
             const logData = {
                 timestamp: new Date(info.timestamp),
-                environment: info.environment || process.env.NODE_ENV || 'development',
+                environment: info.environment || process.env.NODE_ENV,
                 service: info.service || 'app-base-server'
             };
 
@@ -193,7 +197,9 @@ class DatabaseTransport extends winston.Transport {
             if (info.responseTime) logData.responseTime = info.responseTime;
             if (info.ip) logData.ip = info.ip;
             if (info.userAgent) logData.userAgent = info.userAgent;
-            if (info.userId) logData.userId = info.userId;      // Add request/response body and header data if present
+            if (info.userId) logData.userId = info.userId;      
+            
+            // Add request/response body and header data if present
             if (info.requestBody !== undefined) logData.requestBody = info.requestBody;
             if (info.responseBody !== undefined) logData.responseBody = info.responseBody;
             if (info.requestHeaders) logData.requestHeaders = info.requestHeaders;
@@ -224,6 +230,11 @@ class DatabaseTransport extends winston.Transport {
             delete meta.responseHeaders;
             delete meta.contentType;
             delete meta.contentLength;
+            delete meta.socketId;
+            delete meta.transport;
+            delete meta.socketOperation;
+            delete meta.disconnectReason;
+            delete meta.operationType;
             delete meta.stack;
             delete meta.errorCode;
 
@@ -378,8 +389,8 @@ appLogger.http = async (message, metadata = {}) => {
                     contentLength: metadata.contentLength
                 };
 
-                if (metadata.url) {
-                    logData.requestType = LogModel.determineRequestType(metadata.url);
+                if (metadata.method) {
+                    logData.operationType = LogModel.determineOperationType(metadata.method);
                 }
 
                 const savedLog = await LogModel.createLog(logData);
@@ -546,6 +557,76 @@ appLogger.http = async (message, metadata = {}) => {
     }
 };
 
+// WebSocket logging method - mirrors HTTP logging functionality
+appLogger.websocket = async (message, metadata = {}) => {
+    const timestamp = new Date().toLocaleTimeString('en-US', {hour12: false});
+    const timeFormatted = `${colors.dim}${timestamp}${colors.reset}`;
+    const levelFormatted = `${colors.cyan}${colors.bold}🔌 WEBSOCKET${colors.reset}`;
+
+    let objectIdStr = '';
+
+    // Save to database if WebSocket metadata exists
+    if (metadata && (metadata.method || metadata.url || metadata.statusCode)) {
+        try {
+            const LogModel = getLogModel();
+            if (LogModel) {
+                const logData = {
+                    timestamp: new Date(),
+                    environment: process.env.NODE_ENV,
+                    service: 'app-base-server',
+                    ...metadata
+                };
+
+                if (metadata.method) {
+                    logData.operationType = LogModel.determineOperationType(metadata.method);
+                }
+
+                const savedLog = await LogModel.createLog(logData);
+                if (savedLog && savedLog._id) {
+                    objectIdStr = ` ${colors.bgYellow}${colors.bold}[${savedLog._id.toString()}]${colors.reset}`;
+                }
+            }
+        } catch (error) {
+            if (process.env.LOG_LEVEL === 'debug') {
+                console.error('Database logging failed:', error.message);
+            }
+        }
+    }
+
+    // Output the main WebSocket log
+    const finalMessage = `${timeFormatted} [ ${levelFormatted} ] ${message}${objectIdStr}`;
+    appLogger.log({
+        level: 'websocket',
+        message: finalMessage,
+        preformatted: true,
+        ...metadata
+    });
+
+    // Verbose logging for detailed WebSocket info
+    const logLevels = {error: 0, warn: 1, info: 2, http: 3, websocket: 3, verbose: 4, debug: 5, silly: 6};
+    if (logLevels[process.env.LOG_LEVEL] >= logLevels.verbose && metadata) {
+        const verboseTime = `${colors.dim}${timestamp}${colors.reset}`;
+        const verboseLevel = `${colors.cyan}🔍 VERBOSE${colors.reset}`;
+
+        if (metadata.requestBody !== undefined && metadata.requestBody !== null) {
+            try {
+                const formattedData = typeof metadata.requestBody === 'string' 
+                    ? metadata.requestBody 
+                    : JSON.stringify(metadata.requestBody, null, 2);
+                
+                const eventMessage = `${verboseTime} [ ${verboseLevel} ] 📊 WebSocket Event Data (${metadata.eventName || 'unknown'})\n    ${formattedData}`;
+                appLogger.log({level: 'verbose', message: eventMessage, preformatted: true});
+            } catch {
+                appLogger.log({level: 'verbose', message: `${verboseTime} [ ${verboseLevel} ] 📊 WebSocket Event Data: [Unable to format]`, preformatted: true});
+            }
+        }
+
+        if (metadata.error) {
+            appLogger.log({level: 'verbose', message: `${verboseTime} [ ${verboseLevel} ] ❌ WebSocket Error: ${metadata.error}`, preformatted: true});
+        }
+    }
+};
+
 // Remove the old conditional console transport addition since it's now included by default
 
 // Enhanced data body logging for verbose debugging (ported from test logger)
@@ -674,7 +755,7 @@ appLogger.startupMessage = async (serverName, port, mode) => {
         const banner = await generateBanner();
         banner.split('\n').forEach(line => appLogger.info(line));
     } catch (error) {
-        appLogger.info(`🚀 ${process.env.APP_NAME || 'APP-BASE'} 🚀`);
+        appLogger.info(`🚀 ${process.env.APP_NAME} 🚀`);
     }
 
     appLogger.info(`${safeColor(colors.bold)}${safeColor(colors.startup)}${icons.startup || ''} SERVER STARTED ${icons.startup || ''}${safeColor(colors.reset)}`);

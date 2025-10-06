@@ -3,6 +3,7 @@ const rateLimit = require('express-rate-limit');
 const hpp = require('hpp');
 const cors = require('cors');
 const express = require('express');
+const cookieParser = require('cookie-parser');
 const logger = require('../utils/app.logger');
 const redis = require('redis');
 const Log = require('../models/log.model');
@@ -27,8 +28,8 @@ let redisClient;
 
 redisClient = redis.createClient({
     socket: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379'),
+        host: process.env.REDIS_HOST,
+        port: parseInt(process.env.REDIS_PORT),
         reconnectStrategy: (retries) => Math.min(retries * 50, 500)
     },
     disableClientInfo: true
@@ -80,6 +81,7 @@ const methodIcons = {
     DELETE: '\u{1F5D1}',   // 🗑️
     PATCH: '\u{1F527}',    // 🔧
     OPTIONS: '\u{1F4AC}',  // 💬
+    WEBSOCKET: '\u{1F4F6}', // 📶
 };
 
 // Add icons for status codes
@@ -153,6 +155,7 @@ const formatMethod = (method) => {
     if (upperMethod === 'PUT') color = httpColors.cyan;
     if (upperMethod === 'DELETE') color = httpColors.red;
     if (upperMethod === 'PATCH') color = httpColors.magenta;
+    if (upperMethod === 'WEBSOCKET') color = httpColors.magenta;
     return `${color}${icon} ${upperMethod}${httpColors.reset}`;
 };
 
@@ -373,10 +376,10 @@ const setupSecurity = (app) => {
     // Prevent parameter pollution (always enabled)
     app.use(hpp());
     // Get rate limiting configuration from environment variables
-    const rateLimitWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000; // 1 minute default
-    const rateLimitMaxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100; // Default 100 requests
-    const rateLimitAuthWindowMs = parseInt(process.env.RATE_LIMIT_AUTH_WINDOW_MS) || 60000; // 1 minute default
-    const rateLimitAuthMaxRequests = parseInt(process.env.RATE_LIMIT_AUTH_MAX_REQUESTS) || 50; // Default 50 auth requests
+    const rateLimitWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS);
+    const rateLimitMaxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS);
+    const rateLimitAuthWindowMs = parseInt(process.env.RATE_LIMIT_AUTH_WINDOW_MS);
+    const rateLimitAuthMaxRequests = parseInt(process.env.RATE_LIMIT_AUTH_MAX_REQUESTS);
 
     // General rate limiting using environment configuration
     const limiter = rateLimit({
@@ -432,7 +435,7 @@ const setupSecurity = (app) => {
     });
     app.use('/api/v1/auth/', authLimiter);
 
-    const envType = process.env.NODE_ENV || 'development';
+    const envType = process.env.NODE_ENV;
     logger.info(`🛡️ ${envType} mode: Security middleware enabled with configurable rate limits (General: ${rateLimitMaxRequests}/${rateLimitWindowMs}ms, Auth: ${rateLimitAuthMaxRequests}/${rateLimitAuthWindowMs}ms)`);
 };
 
@@ -600,14 +603,25 @@ const setupMiddleware = async (app) => {
     // Setup CORS next
     setupCors(app);
 
-    const maxRequestSize = process.env.MAX_REQUEST_SIZE || '1mb'; // Default 1MB limit
+    const maxRequestSize = process.env.MAX_REQUEST_SIZE;
 
     // Apply explicit payload size limiting middleware
     app.use(limitPayloadSize(maxRequestSize));
 
-    // Body parsers with size limits for security
-    app.use(express.json({limit: maxRequestSize})); // Parses incoming JSON requests with size limit
+    // Body parsers with size limits for security - skip multipart for file uploads
+    app.use((req, res, next) => {
+        // Skip JSON parsing for multipart/form-data requests (file uploads)
+        const contentType = req.get('content-type') || '';
+        
+        if (contentType.startsWith('multipart/form-data')) {
+            return next();
+        }
+        return express.json({limit: maxRequestSize})(req, res, next);
+    });
     app.use(express.urlencoded({extended: true, limit: maxRequestSize})); // Parses URL-encoded data with size limit
+
+    // Cookie parser for authentication token cookies
+    app.use(cookieParser());
 
     // Setup security features
     setupSecurity(app);

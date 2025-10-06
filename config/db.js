@@ -115,17 +115,22 @@ const storeInGridFS = async (filePath, content, metadata = {}) => {
             });
 
             uploadStream.on('error', reject);
-            uploadStream.on('finish', (gridFile) => {
-                resolve(gridFile);
+            uploadStream.on('finish', () => {
+                // The uploadStream.id contains the GridFS _id
+                resolve({
+                    _id: uploadStream.id,
+                    filename: filePath,
+                    metadata: uploadStream.options.metadata
+                });
             });
 
-            // Handle different content types
+            // Handle different content types - convert to buffer if needed
             if (Buffer.isBuffer(content)) {
-                // Content is already a buffer
+                // Content is already a buffer, use as is
                 uploadStream.end(content);
             } else if (typeof content === 'string') {
-                // Content is a string - convert to buffer
-                uploadStream.end(Buffer.from(content, 'utf8'));
+                // Content is assumed to be base64 string
+                uploadStream.end(Buffer.from(content, 'base64'));
             } else {
                 // Unknown content type
                 reject(new Error(`Unsupported content type for GridFS storage: ${typeof content}`));
@@ -209,16 +214,12 @@ const retrieveFromGridFS = async (filePath, {asStream = false} = {}) => {
                     isTextFile, mimeType, isCompressed, algorithm: compressionAlgorithm, bufferLength: buffer.length
                 });
 
-                // Always return buffer for compressed content to allow proper decompression
-                let content = buffer;
-                if (!isCompressed && isTextFile) {
-                    // Only convert to string if it's not compressed and is a text file
-                    content = buffer.toString('utf8');
-                }
+                // Always encode as base64 string regardless of file type or compression
+                const content = buffer.toString('base64');
 
                 // Return all necessary metadata for proper decompression
                 resolve({
-                    content,
+                    content, // Always base64 encoded
                     metadata: file.metadata || {},
                     size: file.length,
                     uploadDate: file.uploadDate,
@@ -239,15 +240,69 @@ const deleteFromGridFS = async (filePath) => {
     try {
         const bucket = getGridFSBucket();
 
-        // Find and delete all files with this path
+        // Find and delete all files with this filename
         const files = await bucket.find({filename: filePath}).toArray();
         for (const file of files) {
             await bucket.delete(file._id);
         }
 
-        return files.length > 0;
+         logger.info(`GridFS file deleted: ${filePath}`, {fileCount: files.length});
     } catch (error) {
         logger.error('GridFS delete error:', error);
+        throw error;
+    }
+};
+
+// Rename file in GridFS
+const renameInGridFS = async (oldPath, newPath) => {
+    try {
+        const bucket = getGridFSBucket();
+
+        // Find files with the old filename
+        const files = await bucket.find({filename: oldPath}).toArray();
+        
+        if (files.length === 0) {
+            // No GridFS files to rename (might be inline storage)
+            return;
+        }
+
+        // For each file, copy to new name and delete old one
+        for (const file of files) {
+            // Read content from old file
+            const downloadStream = bucket.openDownloadStream(file._id);
+            const chunks = [];
+            
+            await new Promise((resolve, reject) => {
+                downloadStream.on('data', (chunk) => chunks.push(chunk));
+                downloadStream.on('error', reject);
+                downloadStream.on('end', resolve);
+            });
+            
+            const content = Buffer.concat(chunks);
+            
+            // Create new file with updated filename
+            await new Promise((resolve, reject) => {
+                const uploadStream = bucket.openUploadStream(newPath, {
+                    metadata: {
+                        ...file.metadata,
+                        originalPath: newPath,
+                        renamedFrom: oldPath,
+                        uploadDate: new Date()
+                    }
+                });
+
+                uploadStream.on('error', reject);
+                uploadStream.on('finish', resolve);
+                uploadStream.end(content);
+            });
+            
+            // Delete old file
+            await bucket.delete(file._id);
+        }
+
+        logger.info(`GridFS file renamed: ${oldPath} → ${newPath}`, {fileCount: files.length});
+    } catch (error) {
+        logger.error('GridFS rename error:', error);
         throw error;
     }
 };
@@ -274,5 +329,11 @@ const closeDB = async () => {
 };
 
 module.exports = {
-    connectDB: connectDB, closeDB, getGridFSBucket, storeInGridFS, retrieveFromGridFS, deleteFromGridFS
+    connectDB: connectDB, 
+    closeDB, 
+    getGridFSBucket, 
+    storeInGridFS, 
+    retrieveFromGridFS, 
+    deleteFromGridFS,
+    renameInGridFS
 };

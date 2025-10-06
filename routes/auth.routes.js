@@ -11,11 +11,13 @@ router.validRoutes = [
     '/api/v1/auth/signup',
     '/api/v1/auth/login',
     '/api/v1/auth/refresh-token',
+    '/api/v1/auth/ws-token',
     '/api/v1/auth/logout',
     '/api/v1/auth/me',
     '/api/v1/auth/devices',
     '/api/v1/auth/forgot-password',
     '/api/v1/auth/reset-password/:token',
+    '/api/v1/auth/socket-token',
     // Two-Factor Authentication
     '/api/v1/auth/2fa/setup',
     '/api/v1/auth/2fa/verify-setup',
@@ -47,10 +49,16 @@ router.post('/refresh-token',
     validateRequest(authSchemas.refreshToken),
     authController.refreshToken);
 
-router.post('/logout',
+// WebSocket token endpoint for cross-origin authentication
+router.get('/ws-token',
     authMiddleware.verifyToken(),
-    authController.logout
-);
+    authController.getWebSocketToken);
+
+router.post('/logout',
+    validateRequest(authSchemas.logout),
+    authMiddleware.verifyToken(),
+    clearCache(['users:online']),
+    authController.logout);
 
 // Add a route to get user profile with caching
 router.get('/me',

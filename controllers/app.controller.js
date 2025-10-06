@@ -57,8 +57,21 @@ const getHealthStatus = async () => {
     // Prepare memory usage info
     const memoryInfo = process.memoryUsage();
 
+    // Check Yjs Redis pub/sub health
+    let yjsRedisHealth = { status: 'not_available' };
+    try {
+        const fileController = require('./file.controller');
+        if (fileController.yjsService && fileController.yjsService.isInitialized) {
+            yjsRedisHealth = await fileController.yjsService.redisHealthCheck();
+        }
+    } catch (error) {
+        yjsRedisHealth = { status: 'error', message: error.message };
+    }
+
+    const overallStatus = dbStatus === 'connected' ? 'ok' : 'error';
+
     return {
-        status: dbStatus === 'connected' ? 'ok' : 'error',
+        status: overallStatus,
         timestamp: new Date().toISOString(),
         env: process.env.NODE_ENV,
         system: {
@@ -73,6 +86,9 @@ const getHealthStatus = async () => {
             status: dbStatus,
             latencyMs: parseFloat(dbLatency),
             connection: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+        },
+        collaborative: {
+            redis: yjsRedisHealth
         },
         responseTimeMs: parseFloat(responseTime)
     };
@@ -163,7 +179,7 @@ const setupHealthRoutes = async (app) => {    // Keep emojis for startup logs as
         logger.info(`   🧠 Memory Usage: ${usedMemoryMB}MB / ${totalMemoryMB}MB (${freeMemoryMB}MB free)`);
         logger.info(`   ⚡ Node Version: ${process.version}`);
         logger.info(`   🖥️  Platform: ${process.platform} (${process.arch})`);
-        logger.info(`   🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        logger.info(`   🌍 Environment: ${process.env.NODE_ENV}`);
         logger.info(`   ⏱️  Uptime: ${Math.floor(process.uptime())}s`);
 
         if (dbStatus === 'connected') {
@@ -283,6 +299,17 @@ const getLogs = asyncHandler(async (req, res, next) => {
     try {
         // Parse filters and options using the universal filter system
         const {filters, options} = parseFilters(req.query);
+
+        // Ensure logs are always ordered by newest first when pagination is applied
+        const enforcedSort = {createdAt: -1, _id: -1};
+        if (options.sort && Object.keys(options.sort).length > 0) {
+            for (const [field, direction] of Object.entries(options.sort)) {
+                if (field !== 'createdAt' && field !== '_id') {
+                    enforcedSort[field] = direction;
+                }
+            }
+        }
+        options.sort = enforcedSort;
 
         // Apply the filters to get logs
         const logs = await applyFilters(Log, filters, options);
@@ -975,41 +1002,6 @@ const getLogStats = asyncHandler(async (req, res, next) => {
             {$limit: 10}
         ]);
 
-        // Request type performance analysis - FIXED: Now includes user filtering
-        const requestTypePerformance = await Log.aggregate([
-            createMatchStage({
-                requestType: {$exists: true},
-                timestamp: {$gte: startOfDay}
-            }),
-            {
-                $group: {
-                    _id: '$requestType',
-                    count: {$sum: 1},
-                    avgResponseTime: {$avg: '$responseTime'},
-                    errorRate: {
-                        $avg: {
-                            $cond: [{$gte: ['$statusCode', 400]}, 1, 0]
-                        }
-                    },
-                    successRate: {
-                        $avg: {
-                            $cond: [{$and: [{$gte: ['$statusCode', 200]}, {$lt: ['$statusCode', 300]}]}, 1, 0]
-                        }
-                    }
-                }
-            },
-            {
-                $project: {
-                    _id: 1,
-                    count: 1,
-                    avgResponseTime: {$round: ['$avgResponseTime', 2]},
-                    errorRate: {$round: [{$multiply: ['$errorRate', 100]}, 2]},
-                    successRate: {$round: [{$multiply: ['$successRate', 100]}, 2]}
-                }
-            },
-            {$sort: {count: -1}}
-        ]);
-
         // 7. User Session Analysis (if userId exists) - FIXED: Now includes user filtering
         const userSessionStats = await Log.aggregate([
             createMatchStage({
@@ -1282,7 +1274,6 @@ const getLogStats = asyncHandler(async (req, res, next) => {
                 businessIntelligence: {
                     endpointPopularity: endpointPopularity || [],
                     contentTypeDistribution: contentTypeDistribution || [],
-                    requestTypePerformance: requestTypePerformance || [],
                     userSessions: userSessionStats[0] || {
                         totalActiveSessions: 0,
                         avgSessionDuration: 0,
@@ -1342,7 +1333,7 @@ const getLogStats = asyncHandler(async (req, res, next) => {
                         processingNote: `Comprehensive log statistics with real metrics${userId ? ' for specific user' : ' for all users'}`,
                         generatedBy: 'LogStats API',
                         version: '1.2.0', // Updated version to reflect optimizations
-                        environment: process.env.NODE_ENV || 'development',
+                        environment: process.env.NODE_ENV,
                         scope: userId ? 'user-specific' : 'all-users',
                         userId: userId || null
                     }
@@ -1506,14 +1497,14 @@ const sendEmail = async ({to, subject, template, data, from}, transporter = null
         const compiledTemplate = await loadTemplate(template);
         const htmlContent = compiledTemplate({
             ...data,
-            appName: process.env.APP_NAME || 'App Base',
-            appUrl: process.env.APP_URL || 'http://localhost:8080',
+            appName: process.env.APP_NAME,
+            appUrl: process.env.APP_URL,
             currentYear: new Date().getFullYear()
         });
 
         // Prepare email options
         const mailOptions = {
-            from: from || process.env.EMAIL_FROM || process.env.EMAIL_USER, to, subject, html: htmlContent
+            from: from || process.env.EMAIL_FROM, to, subject, html: htmlContent
         };
 
         // Send email
@@ -1620,8 +1611,8 @@ const renderEmailTemplate = asyncHandler(async (req, res, next) => {
         const compiledTemplate = await loadTemplate(template);
         const htmlContent = compiledTemplate({
             ...data,
-            appName: process.env.APP_NAME || 'App Base',
-            appUrl: process.env.APP_URL || 'http://localhost:8080',
+            appName: process.env.APP_NAME ,
+            appUrl: process.env.APP_URL,
             currentYear: new Date().getFullYear()
         });
 
@@ -1762,7 +1753,7 @@ const getGridFSStorageStats = async () => {
                     const fileTypeBreakdown = await File.aggregate([
                         {
                             $group: {
-                                _id: '$fileType',
+                                _id: '$type',
                                 count: {$sum: 1},
                                 totalSize: {$sum: {$ifNull: ['$size', 0]}}
                             }
@@ -2021,9 +2012,9 @@ const parseFilters = (query) => {
     if (query.fileType) {
         if (query.fileType.includes(',')) {
             const types = query.fileType.split(',').map(t => t.trim().toLowerCase());
-            filters.fileType = {$in: types};
+            filters.type = {$in: types};
         } else {
-            filters.fileType = query.fileType.toLowerCase();
+            filters.type = query.fileType.toLowerCase();
         }
     }
 
@@ -2084,16 +2075,6 @@ const parseFilters = (query) => {
         }
         if (Object.keys(responseTimeFilter).length > 0) {
             filters.responseTime = responseTimeFilter;
-        }
-    }
-
-    // Request type filters
-    if (query.requestType) {
-        if (query.requestType.includes(',')) {
-            const types = query.requestType.split(',').map(t => t.trim().toUpperCase());
-            filters.requestType = {$in: types};
-        } else {
-            filters.requestType = query.requestType.toUpperCase();
         }
     }
 
@@ -2170,21 +2151,23 @@ const parseFilters = (query) => {
     }
 
     // Pagination
-    if (query.page && query.limit) {
-        const page = parseInt(query.page);
+    if (query.limit) {
+        const page = parseInt(query.page) || 1; // Default to page 1 if not provided
         const limit = parseInt(query.limit);
         
         // Validate pagination parameters
         if (page < 1 || limit < 1 || isNaN(page) || isNaN(limit)) {
-            logger.warn(`Invalid pagination parameters: page=${query.page}, limit=${query.limit}. Using limit=all instead.`);
-            // Invalid pagination - return all logs (no pagination)
-            // Don't set options.pagination to return all results
+            logger.warn(`Invalid pagination parameters: page=${query.page}, limit=${query.limit}. Skipping pagination to use smart loading.`);
+            // Don't set pagination options - let smart pagination handle it
         } else {
             options.pagination = {
                 skip: (page - 1) * limit,
-                limit: Math.min(limit, 1000) // Max 1000 items per page
+                limit: limit // No limit cap - allow unlimited logs per page
             };
         }
+    } else {
+        // No pagination specified - smart pagination will be used
+        options.pagination = {};
     }
 
     // Group by fields for aggregation
@@ -2205,7 +2188,7 @@ const parseFilters = (query) => {
 };
 
 /**
- * Apply filters to a MongoDB query
+ * Apply filters to a MongoDB query with smart pagination to avoid memory limits
  * @param {Object} model - Mongoose model
  * @param {Object} filters - Parsed filters
  * @param {Object} options - Query options
@@ -2213,6 +2196,11 @@ const parseFilters = (query) => {
  */
 const applyFilters = async (model, filters, options) => {
     try {
+        // If no pagination is specified, implement smart progressive loading
+        if (!options.pagination.limit) {
+            return await applySmartPagination(model, filters, options);
+        }
+
         let query = model.find(filters);
 
         // Apply sorting
@@ -2231,6 +2219,55 @@ const applyFilters = async (model, filters, options) => {
         return await query.exec();
     } catch (error) {
         logger.error('Error applying filters:', error);
+        throw error;
+    }
+};
+
+/**
+ * Smart pagination to load maximum logs without hitting MongoDB memory limits
+ * @param {Object} model - Mongoose model
+ * @param {Object} filters - Parsed filters
+ * @param {Object} options - Query options
+ * @returns {Promise} - Query result
+ */
+const applySmartPagination = async (model, filters, options) => {
+    const limits = [null, 50000, 30000, 18000, 10800, 6400, 100, 50]; // null = unlimited
+    
+    for (let i = 0; i < limits.length; i++) {
+        const limit = limits[i];
+        const attempt = i + 1;
+        
+        try {
+            logger.info(`${limit ? `Attempting to load ${limit} logs` : 'Attempting to load all available logs'} (attempt ${attempt}/${limits.length})`);
+            
+            let query = model.find(filters);
+            
+            if (Object.keys(options.sort).length > 0) {
+                query = query.sort(options.sort);
+            }
+            
+            if (limit) query = query.limit(limit);
+            
+            const result = await query.exec();
+            logger.info(`Successfully loaded ${result.length} logs${limit ? ` (limit ${limit})` : ''}`);
+            return result;
+            
+        } catch (error) {
+            // Memory limit error - try next smaller limit
+            if (error.code === 292 || error.message.includes('Sort exceeded memory limit')) {
+                logger.warn(`Memory limit exceeded${limit ? ` with limit ${limit}` : ''}, retrying with limit ${limits[i + 1] || 'fallback'}`);
+                continue;
+            }
+            throw error; // Non-memory errors
+        }
+    }
+    
+    // Final fallback with basic _id sort
+    try {
+        logger.info('Final fallback: loading 50 logs with _id sort');
+        return await model.find(filters).sort({ _id: -1 }).limit(50).exec();
+    } catch (error) {
+        logger.error('All attempts failed:', error);
         throw error;
     }
 };
@@ -2445,7 +2482,7 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
             platform: process.platform,
             arch: process.arch,
             uptime: Math.floor(process.uptime()),
-            environment: process.env.NODE_ENV || 'development',
+            environment: process.env.NODE_ENV,
             memory: {
                 used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
                 total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
@@ -2465,7 +2502,7 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
             },
             email: {
                 status: emailReady ? 'configured' : 'not configured',
-                host: process.env.EMAIL_HOST || 'not configured'
+                host: process.env.EMAIL_HOST
             },
             storage: {
                 totalFiles: fileStorageStats.totalFiles || 0,
@@ -2661,6 +2698,7 @@ module.exports = {
     // Query filter functions
     parseFilters,
     applyFilters,
+    applySmartPagination,
     applyFiltersToAggregation,
     getFilterSummary
 };

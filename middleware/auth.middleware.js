@@ -19,27 +19,32 @@ const normalizeRoles = userMiddleware.normalizeRoles;
  */
 const verifyToken = (tokenType = 'access') => (req, res, next) => {
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader?.startsWith('Bearer ')) {
-            logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Unauthorized: Token is missing`, {
+        // Get token from cookies only - no backwards compatibility with headers
+        const cookieName = tokenType === 'refresh' ? 'refreshToken' : 'accessToken';
+        const token = req.cookies?.[cookieName];
+        
+        if (!token) {
+            logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Unauthorized: Token cookie missing`, {
                 ip: req.ip,
-                originalUrl: req.originalUrl
+                originalUrl: req.originalUrl,
+                cookieName,
+                tokenType,
+                hasCookies: !!req.cookies
             });
             return res.status(401).json({
                 success: false,
-                message: 'Unauthorized: Token is missing'
+                message: 'Unauthorized: Authentication required'
             });
         }
-
-        const token = authHeader.split(' ')[1];
 
         const secret = tokenType === 'refresh'
             ? process.env.REFRESH_TOKEN_SECRET
             : process.env.ACCESS_TOKEN_SECRET;
+            
         jwt.verify(token, secret, async (err, decoded) => {
             if (err) {
                 logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Invalid or expired token`, {
-                    error: err,
+                    error: err.message,
                     tokenType,
                     ip: req.ip
                 });
@@ -256,17 +261,10 @@ const checkRole = (requiredRole) => (req, res, next) => {
 const optionalAuth = (options = {}) => {
     return async (req, res, next) => {
         try {
-            const authHeader = req.headers.authorization;
+            // Check for token in cookies only - no header fallback
+            const token = req.cookies?.accessToken;
 
             // If no token provided, continue without user
-            if (!authHeader || !authHeader.startsWith('Bearer ')) {
-                req.user = null;
-                return next();
-            }
-
-            const token = authHeader.split(' ')[1];
-
-            // If empty token, continue without user  
             if (!token) {
                 req.user = null;
                 return next();
@@ -320,11 +318,97 @@ const optionalAuth = (options = {}) => {
     };
 };
 
+/**
+ * WebSocket Authentication helper - leverages existing HTTP auth middleware
+ * @param {WebSocket} ws - WebSocket connection
+ * @param {Object} req - WebSocket request object
+ * @returns {Promise<Object>} - Authenticated user object
+ */
+const authenticateWebSocket = async (ws, req) => {
+    const cookie = require('cookie');
+    const cookieParser = require('cookie-parser');
+    const url = require('url');
+    
+    try {
+        // Parse cookies and attach to fake req object to reuse existing middleware
+        if (req.headers.cookie) {
+            const rawCookies = cookie.parse(req.headers.cookie);
+            const jsonCookies = cookieParser.JSONCookies(rawCookies);
+            req.cookies = { ...rawCookies, ...jsonCookies };
+        } else {
+            req.cookies = {};
+        }
+        
+        // TEMPORARY: Support URL token for existing connections (will be removed)
+        // Parse URL parameters as fallback for backwards compatibility
+        const parsedUrl = url.parse(req.url, true);
+        const urlToken = parsedUrl.query.token;
+        
+        // If no cookies but URL token exists, temporarily set it as cookie for validation
+        if (!req.cookies.accessToken && !req.cookies.refreshToken && urlToken) {
+            logger.warn('WebSocket: Using URL token (DEPRECATED - will be removed)', { tokenLength: urlToken.length });
+            // Temporarily set as cookie for existing middleware to process
+            req.cookies.accessToken = urlToken;
+        }
+
+        // Create promise to capture the middleware result
+        return new Promise((resolve, reject) => {
+            // Mock res object for middleware
+            const mockRes = {
+                status: () => mockRes,
+                json: (data) => {
+                    const error = new Error(data.message || 'Authentication failed');
+                    error.statusCode = 401;
+                    reject(error);
+                }
+            };
+
+            // Try access token first
+            const accessMiddleware = verifyToken('access');
+            accessMiddleware(req, mockRes, (err) => {
+                if (err || !req.user) {
+                    // Access token failed, try refresh token
+                    const refreshMiddleware = verifyToken('refresh');
+                    refreshMiddleware(req, mockRes, (refreshErr) => {
+                        if (refreshErr || !req.user) {
+                            const closeReason = 'Token expired';
+                            logger.warn('WebSocket: Authentication failed - no valid tokens', {
+                                url: req.url,
+                                origin: req.headers.origin,
+                                hasCookies: !!req.headers.cookie,
+                                hasUrlToken: !!urlToken,
+                                userAgent: req.headers['user-agent']
+                            });
+                            ws.close(1008, closeReason);
+                            reject(new Error(closeReason));
+                        } else {
+                            // Success with refresh token
+                            ws.user = req.user;
+                            logger.info(`🔌 Authenticated WebSocket connection for user ${req.user.username} (${req.user.id})`);
+                            resolve(req.user);
+                        }
+                    });
+                } else {
+                    // Success with access token
+                    ws.user = req.user;
+                    logger.info(`🔌 Authenticated WebSocket connection for user ${req.user.username} (${req.user.id})`);
+                    resolve(req.user);
+                }
+            });
+        });
+    } catch (error) {
+        logger.error('WebSocket authentication error:', error);
+        ws.close(1008, 'Authentication failed');
+        throw error;
+    }
+};
+
 module.exports = {
     verifyToken,
     checkRole,
     checkPermission,
     optionalAuth,
+    authenticateWebSocket, // Add WebSocket auth function
     // Export constants for convenience
     ROLES,
     RIGHTS

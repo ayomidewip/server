@@ -33,7 +33,89 @@ const formatUserResponse = (user) => {
     };
 };
 
+// Helper function to format public user response (limited info)
+const formatPublicUserResponse = (user) => {
+    const roles = normalizeRoles(user.roles);
+    
+    return {
+        id: user._id || user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        email: user.email,
+        roles: roles
+    };
+};
+
 module.exports = {
+    // Get public users (authenticated users only - limited info)
+    getPublicUsers: asyncHandler(async (req, res, next) => {
+        try {
+            // Parse filters and options using the universal filter system
+            const {filters, options} = parseFilters(req.query);
+
+            // Only show active users by default
+            if (!filters.active) {
+                filters.active = true;
+            }
+
+            // Create the base query - only select public fields
+            let query = User.find(filters).select('firstName lastName username email roles');
+
+            // Apply sorting (default to firstName)
+            if (Object.keys(options.sort).length > 0) {
+                query = query.sort(options.sort);
+            } else {
+                query = query.sort({ firstName: 1, lastName: 1 });
+            }
+
+            // Apply pagination
+            if (options.pagination.skip !== undefined) {
+                query = query.skip(options.pagination.skip);
+            }
+            if (options.pagination.limit !== undefined) {
+                query = query.limit(options.pagination.limit);
+            }
+
+            // Execute the query
+            const users = await query.exec();
+
+            // Get total count for pagination metadata
+            const totalUsers = await User.countDocuments(filters);
+
+            // Get filter summary for response metadata
+            const filterSummary = getFilterSummary(filters, options);
+
+            logger.info(`${logger.safeColor(logger.colors.cyan)}[User Controller]${logger.safeColor(logger.colors.reset)} Public users fetched`, {
+                count: users.length,
+                totalUsers,
+                requestedBy: req.user?.username
+            });
+
+            res.status(200).json({
+                success: true,
+                message: 'Public users retrieved successfully',
+                users: users.map(formatPublicUserResponse),
+                meta: {
+                    count: users.length,
+                    totalUsers,
+                    pagination: {
+                        page: filterSummary.pagination?.page || 1,
+                        limit: filterSummary.pagination?.limit || users.length,
+                        totalPages: filterSummary.pagination ? Math.ceil(totalUsers / filterSummary.pagination.limit) : 1
+                    },
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } catch (error) {
+            logger.error(`${logger.safeColor(logger.colors.red)}[User Controller]${logger.safeColor(logger.colors.reset)} Error fetching public users:`, {
+                error: error.message,
+                requestedBy: req.user?.username
+            });
+            return next(new AppError(`Failed to retrieve public users: ${error.message}`, 500));
+        }
+    }),
+
     // Get all users (admin only)
     getAllUsers: asyncHandler(async (req, res, next) => {
         try {
@@ -189,8 +271,8 @@ module.exports = {
 
             const savedUser = await newUser.save();
 
-            // Clear users list cache after creating new user
-            await cache.del('users:list:all');
+            // Use sophisticated cache invalidation for new user creation
+            await cache.invalidateAllRelatedCaches('user', savedUser._id, savedUser._id);
 
             logger.info(`${logger.safeColor(logger.colors.green)}[User Controller]${logger.safeColor(logger.colors.reset)} User created successfully`, {
                 userId: savedUser._id,
@@ -251,6 +333,7 @@ module.exports = {
         }
     }),
 
+    // Update User (supports role request auto-approval)
     updateUser: asyncHandler(async (req, res, next) => {
         const userId = req.params.id;
         logger.info(`${logger.safeColor(logger.colors.cyan)}[User Controller]${logger.safeColor(logger.colors.reset)} Updating user ${userId}`, {
@@ -312,15 +395,67 @@ module.exports = {
 
             const allowedFields = ['firstName', 'lastName', 'email', 'username', 'profilePhoto'];
             if (hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS)) {
-                allowedFields.push('roles');
+                allowedFields.push('roles', 'active');
             }
+
+            logger.debug('User update request', {
+                userId: req.user.id,
+                targetUserId: req.params.id,
+                allowedFields,
+                requestedFields: Object.keys(req.body)
+            });
 
             const updates = {};
             Object.keys(req.body).forEach(key => {
                 if (allowedFields.includes(key)) {
                     updates[key] = req.body[key];
+                    logger.debug(`Including field ${key} in user update`, {
+                        userId: req.user.id,
+                        targetUserId: req.params.id,
+                        field: key
+                    });
+                } else {
+                    logger.debug(`Excluding field ${key} from user update (not in allowedFields)`, {
+                        userId: req.user.id,
+                        targetUserId: req.params.id,
+                        field: key,
+                        allowedFields
+                    });
                 }
             });
+
+            // Check if roles are being updated and handle role requests
+            if (updates.roles && hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS)) {
+                const newRoles = normalizeRoles(updates.roles);
+                const currentPendingRoles = normalizeRoles(user.pendingRoles || []);
+                
+                // Check if the new roles include all pending roles
+                if (user.roleApprovalStatus === 'PENDING' && currentPendingRoles.length > 0) {
+                    const allPendingRolesIncluded = currentPendingRoles.every(pendingRole => 
+                        newRoles.includes(pendingRole)
+                    );
+                    
+                    if (allPendingRolesIncluded) {
+                        // Auto-approve the role request since admin is granting the requested roles
+                        logger.info(`Auto-approving role request for user ${userId} during admin update`, {
+                            requestorId: req.user.id,
+                            previousRoles: user.roles,
+                            newRoles: newRoles,
+                            pendingRoles: currentPendingRoles
+                        });
+                        
+                        // Clear pending status and update approval metadata
+                        updates.pendingRoles = [];
+                        updates.roleApprovalStatus = 'APPROVED';
+                        updates.roleApprovalRequest = {
+                            ...user.roleApprovalRequest,
+                            approvedBy: req.user.id,
+                            approvedAt: new Date(),
+                            reason: 'Role request approved via admin user update'
+                        };
+                    }
+                }
+            }
 
             if (Object.keys(updates).length === 0) {
                 if (req.body.roles && !hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS)) {
@@ -334,6 +469,7 @@ module.exports = {
                     timestamp: new Date().toISOString()
                 });
             }
+            
             // Sanitize HTML content in update data before saving to database
             const sanitizedUpdates = sanitizeHtmlInObject(updates);
 
@@ -343,7 +479,7 @@ module.exports = {
                     req.params.id,
                     {$set: sanitizedUpdates},
                     {new: true, runValidators: true}
-                );
+                ).select('+active'); // Include the active field in the response
             } catch (updateError) {
                 logger.error(`Error updating user ${req.params.id}:`, {
                     message: updateError.message,
@@ -376,13 +512,23 @@ module.exports = {
             }
             logger.info(`${logger.safeColor(logger.colors.green)}[User Controller]${logger.safeColor(logger.colors.reset)} User updated successfully: ${updatedUser._id}`, {updates});
 
-            await cache.set(`user:profile:${userId}`, updatedUser, 3600); // Update cache
-            await cache.invalidateUserCaches(userId); // Use helper for comprehensive cache invalidation
+            // Use comprehensive cache invalidation instead of manual cache operations
+            await cache.invalidateAllRelatedCaches('user', userId, userId);
+
+            // Check if role request was auto-approved during this update
+            const roleRequestApproved = updates.roleApprovalStatus === 'APPROVED' && 
+                                      updates.pendingRoles && 
+                                      updates.pendingRoles.length === 0;
+
+            const responseMessage = roleRequestApproved ? 
+                'User updated successfully and pending role request auto-approved' : 
+                'User updated successfully';
 
             return res.json({
                 success: true,
-                message: 'User updated successfully',
+                message: responseMessage,
                 user: formatUserResponse(updatedUser),
+                roleRequestAutoApproved: roleRequestApproved,
                 timestamp: new Date().toISOString()
             });
         } catch (error) {
@@ -687,7 +833,7 @@ module.exports = {
                     summary: {
                         totalFiles,
                         totalSize: files.reduce((total, file) => total + (file.size || 0), 0),
-                        fileTypes: [...new Set(files.map(file => file.fileType).filter(Boolean))],
+                        fileTypes: [...new Set(files.map(file => file.type).filter(Boolean))],
                         inlineStorage: files.filter(file => file.storageType === 'inline').reduce((total, file) => total + (file.size || 0), 0),
                         gridfsStorage: files.filter(file => file.storageType === 'gridfs').reduce((total, file) => total + (file.size || 0), 0),
                         storageBreakdown: [
@@ -757,7 +903,6 @@ module.exports = {
                     {
                         $match: {
                             userId: new mongoose.Types.ObjectId(userId),
-                            requestType: 'AUTH',
                             statusCode: {$gte: 200, $lt: 300},
                             url: {$regex: 'login', $options: 'i'},
                             timestamp: timeFilter
@@ -778,7 +923,6 @@ module.exports = {
                     {
                         $group: {
                             _id: {
-                                requestType: '$requestType',
                                 operationType: {$ifNull: ['$operationType', 'OTHER']}
                             },
                             count: {$sum: 1},
@@ -835,7 +979,6 @@ module.exports = {
                         success: log.statusCode >= 200 && log.statusCode < 300
                     })),
                     activityBreakdown: activityLogs.map(log => ({
-                        type: log._id.requestType,
                         operation: log._id.operationType,
                         count: log.count,
                         avgResponseTime: Math.round(log.avgResponseTime * 100) / 100
@@ -979,7 +1122,6 @@ module.exports = {
                         if (activityField === 'lastLogin') {
                             const lastLogin = await Log.findOne({
                                 userId: new mongoose.Types.ObjectId(userId),
-                                requestType: 'AUTH',
                                 statusCode: {$gte: 200, $lt: 300},
                                 url: {$regex: 'login', $options: 'i'}
                             }).sort({timestamp: -1});
@@ -990,7 +1132,6 @@ module.exports = {
                             const limit = req.query.limit || 10;
                             const loginHistory = await Log.find({
                                 userId: new mongoose.Types.ObjectId(userId),
-                                requestType: 'AUTH',
                                 statusCode: {$gte: 200, $lt: 300},
                                 url: {$regex: 'login', $options: 'i'},
                                 timestamp: timeFilter
@@ -1017,7 +1158,6 @@ module.exports = {
                                 {
                                     $group: {
                                         _id: {
-                                            requestType: '$requestType',
                                             operationType: {$ifNull: ['$operationType', 'OTHER']}
                                         },
                                         count: {$sum: 1},
@@ -1028,7 +1168,6 @@ module.exports = {
                             ]);
 
                             setNestedProperty(result.data, field, activityBreakdown.map(log => ({
-                                type: log._id.requestType,
                                 operation: log._id.operationType,
                                 count: log.count,
                                 avgResponseTime: Math.round(log.avgResponseTime * 100) / 100
@@ -1238,7 +1377,7 @@ module.exports = {
                 {
                     $group: {
                         _id: {
-                            requestType: "$requestType"
+                            method: "$method"
                         },
                         count: {$sum: 1},
                         avgResponseTime: {$avg: "$responseTime"}
@@ -1251,7 +1390,6 @@ module.exports = {
             const recentLogins = await Log.aggregate([
                 {
                     $match: {
-                        requestType: 'AUTH',
                         method: 'POST',
                         url: {$regex: 'login', $options: 'i'},
                         statusCode: {$gte: 200, $lt: 300}
@@ -1324,7 +1462,7 @@ module.exports = {
 
             stats.activity = {
                 metrics: activityMetrics.map(item => ({
-                    type: item._id.requestType,
+                    type: item._id.method,
                     count: item.count,
                     avgResponseTime: Math.round(item.avgResponseTime * 100) / 100
                 })),

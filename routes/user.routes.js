@@ -10,6 +10,7 @@ const {cacheResponse, clearCache, autoInvalidateCache} = require('../middleware/
 // Define user routes for validation
 router.validRoutes = [
     '/api/v1/users',
+    '/api/v1/users/public',
     '/api/v1/users/stats/overview',
     '/api/v1/users/:id',
     '/api/v1/users/:id/password',
@@ -18,8 +19,25 @@ router.validRoutes = [
     '/api/v1/users/:id/stats/fields'
 ];
 
-// Protect all user routes
+/**
+ * Get Public Users (limited info):
+ * Route Definition: GET /api/v1/users/public
+ * Permission: Any authenticated user
+ * Returns: firstName, lastName, username, email, roles only
+ */
+router.get('/public',
+    authMiddleware.verifyToken(),
+    cacheResponse(1800, (req) => {
+        const params = req.query ? new URLSearchParams(req.query).toString() : '';
+        return `users:public:${params ? Buffer.from(params).toString('base64') : 'all'}`;
+    }), // Cache for 30 minutes
+    userController.getPublicUsers
+);
+
+// Ensure all routes are authenticated first
 router.use(authMiddleware.verifyToken());
+
+// ADMIN-ONLY ROUTES (require MANAGE_ALL_USERS permission)
 
 /**
  * Get All Users:
@@ -52,18 +70,6 @@ router.get('/stats/overview',
 );
 
 /**
- * Get Single User
- * Route definition:
- * Permissions: Unrestricted => Super Admin, Admin; Restricted => Logged-in User
- */
-router.get('/:id',
-    userMiddleware.checkUserExists,
-    userMiddleware.checkResourceOwnership,
-    cacheResponse(3600, (req) => `user:profile:${req.params.id}`), // Cache for 1 hour
-    userController.getUserById
-);
-
-/**
  * Create New User
  * Route definition:
  * Permissions: Super Admin, Admin only; Users use Auth routes
@@ -75,15 +81,29 @@ router.post('/',
     validateRequest(userSchemas.createUser),
     userMiddleware.checkDuplicateUsernameOrEmail,
     userMiddleware.hashPassword,
-    clearCache(['users:list:all']),
+    clearCache(['users:list:*', 'users:stats:*']),
     autoInvalidateCache('user', (req) => req.body.id || 'new_user'),
     userController.createUser
+);
+
+// SELF-ACCESS AND ADMIN ROUTES (use checkResourceOwnership for permission control)
+
+/**
+ * Get Single User
+ * Route definition:
+ * Permissions: Unrestricted => Super Admin, Admin; Restricted => Logged-in User (own profile only)
+ */
+router.get('/:id',
+    userMiddleware.checkUserExists,
+    userMiddleware.checkResourceOwnership,
+    cacheResponse(3600, (req) => `user:profile:${req.params.id}`), // Cache for 1 hour
+    userController.getUserById
 );
 
 /**
  * Update Existing User
  * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User
+ * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own profile only)
  */
 router.put('/:id',
     userMiddleware.checkUserExists,
@@ -92,7 +112,7 @@ router.put('/:id',
     userMiddleware.checkRoles(),
     validateRequest(userSchemas.updateUser),
     userMiddleware.checkDuplicateUsernameOrEmail,
-    clearCache((req) => ['users:list:all', `user:profile:${req.params.id}`]),
+    clearCache((req) => ['users:list:*', 'users:stats:*', `user:profile:${req.params.id}`]),
     autoInvalidateCache('user'),
     userController.updateUser
 );
@@ -100,12 +120,12 @@ router.put('/:id',
 /**
  * Delete User
  * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User
+ * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own account only)
  */
 router.delete('/:id',
     userMiddleware.checkUserExists,
     userMiddleware.checkDeletePermission,
-    clearCache((req) => ['users:list:all', `user:profile:${req.params.id}`]),
+    clearCache((req) => ['users:list:*', 'users:stats:*', `user:profile:${req.params.id}`]),
     autoInvalidateCache('user'),
     userController.deleteUser
 );
@@ -113,7 +133,7 @@ router.delete('/:id',
 /**
  * Change User Password
  * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User
+ * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own password only)
  */
 router.put('/:id/password',
     userMiddleware.checkUserExists,
@@ -143,7 +163,7 @@ router.get('/:id/files',
 /**
  * Get User Statistics
  * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Limited view for other users, full view for self
+ * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own stats only)
  */
 router.get('/:id/stats',
     userMiddleware.checkUserExists,
@@ -165,7 +185,7 @@ router.get('/:id/stats',
 /**
  * Get Specific User Data Fields
  * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Limited view for other users, full view for self
+ * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own data only)
  * Query params: fields=activity.loginHistory,files.totalFiles,security.active
  */
 router.get('/:id/stats/fields',

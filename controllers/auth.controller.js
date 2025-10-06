@@ -48,6 +48,85 @@ const generateTokens = (user) => {
 };
 
 /**
+ * Set authentication tokens as httpOnly cookies
+ * @param {Object} res - Express response object
+ * @param {string} accessToken - JWT access token
+ * @param {string} refreshToken - JWT refresh token
+ */
+const setTokenCookies = (res, accessToken, refreshToken) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // Parse token expiry times
+    const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRY;
+    const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRY;
+    
+    // Convert expiry strings to milliseconds
+    const parseExpiry = (expiry) => {
+        const unit = expiry.slice(-1);
+        const value = parseInt(expiry.slice(0, -1));
+        
+        switch(unit) {
+            case 'm': return value * 60 * 1000; // minutes
+            case 'h': return value * 60 * 60 * 1000; // hours
+            case 'd': return value * 24 * 60 * 60 * 1000; // days
+            default: return value * 1000; // assume seconds
+        }
+    };
+    
+    const accessTokenMaxAge = parseExpiry(accessTokenExpiry);
+    const refreshTokenMaxAge = parseExpiry(refreshTokenExpiry);
+    
+    // Set access token cookie
+    res.cookie('accessToken', accessToken, {
+        httpOnly: true,
+        secure: isProduction, // HTTPS only in production
+        sameSite: isProduction ? 'none' : 'lax', // Cross-site in production
+        maxAge: accessTokenMaxAge,
+        path: '/'
+    });
+    
+    // Set refresh token cookie
+    res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: isProduction, // HTTPS only in production
+        sameSite: isProduction ? 'none' : 'lax', // Cross-site in production
+        maxAge: refreshTokenMaxAge,
+        path: '/'
+    });
+    
+    logger.verbose('[Auth Controller] Tokens set as httpOnly cookies:', {
+        accessTokenMaxAge: Math.floor(accessTokenMaxAge / 1000 / 60) + 'm',
+        refreshTokenMaxAge: Math.floor(refreshTokenMaxAge / 1000 / 60 / 60 / 24) + 'd',
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax'
+    });
+};
+
+/**
+ * Clear authentication token cookies
+ * @param {Object} res - Express response object
+ */
+const clearTokenCookies = (res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    res.clearCookie('accessToken', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+        path: '/'
+    });
+    
+    res.clearCookie('refreshToken', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+        path: '/'
+    });
+    
+    logger.verbose('[Auth Controller] Authentication cookies cleared');
+};
+
+/**
  * Cache session token for tracking active sessions
  * @param {string} userId - User ID
  * @param {string} token - Access token
@@ -127,7 +206,7 @@ const sendWelcomeEmail = async (user, transporter = null) => {
         to: user.email, subject: 'Welcome to App Base!', template: 'welcome', data: {
             firstName: user.firstName || user.name || 'User',
             email: user.email,
-            loginUrl: `${process.env.APP_URL || 'http://localhost:8080'}/auth/login`
+            loginUrl: `${process.env.APP_URL}/auth/login`
         }
     }, transporter);
 };
@@ -250,13 +329,8 @@ module.exports = {
             }            // Save the user to the database
             await user.save();
 
-            // Clear users:list:all cache after creating new user
-            await cache.del('users:list:all');
-
-            // Clear pending requests cache if we just created a user with pending roles
-            if (user.roleApprovalStatus === 'PENDING') {
-                await cache.del('roles:pending');
-            }
+            // Use sophisticated cache invalidation for user creation
+            await cache.invalidateAllRelatedCaches('user', user.id, user.id);
 
             logger.info(`${logger.safeColor(logger.colors.cyan)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Signup: User created successfully`, {
                 userId: user.id, username: user.username
@@ -306,13 +380,12 @@ module.exports = {
                 additionalInfo.roleApprovalStatus = 'APPROVED';
             }
 
+            // Set authentication tokens as httpOnly cookies
+            setTokenCookies(res, tokens.accessToken, tokens.refreshToken);
+
             res.status(201).json({
                 success: true,
                 message: responseMessage,
-                authentication: {
-                    accessToken: tokens.accessToken,
-                    refreshToken: tokens.refreshToken
-                },
                 user: formatUserResponse(user),
                 meta: {
                     deviceInfo: {
@@ -500,13 +573,12 @@ module.exports = {
                 hasRefreshToken: !!tokens.refreshToken
             });
 
+            // Set authentication tokens as httpOnly cookies
+            setTokenCookies(res, tokens.accessToken, tokens.refreshToken);
+
             res.status(200).json({
                 success: true,
                 message: 'Login successful',
-                authentication: {
-                    accessToken: tokens.accessToken,
-                    refreshToken: tokens.refreshToken
-                },
                 user: formatUserResponse(user),
                 meta: {
                     timestamp: new Date().toISOString()
@@ -529,10 +601,12 @@ module.exports = {
         });
 
         try {
-            const {token: refreshToken} = req.body;
+            // Get refresh token from cookies only - no body support
+            const refreshToken = req.cookies?.refreshToken;
+            
             if (!refreshToken) {
                 logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Refresh token: Token is required`);
-                return res.status(401).json({
+                return res.status(400).json({
                     success: false, message: 'Refresh token is required'
                 });
             }
@@ -613,13 +687,12 @@ module.exports = {
                 hasRefreshToken: !!tokens.refreshToken
             });
 
+            // Set authentication tokens as httpOnly cookies
+            setTokenCookies(res, tokens.accessToken, tokens.refreshToken);
+
             res.status(200).json({
                 success: true,
                 message: 'Token refreshed successfully',
-                authentication: {
-                    accessToken: tokens.accessToken,
-                    refreshToken: tokens.refreshToken
-                },
                 user: formatUserResponse(user),
                 meta: {
                     timestamp: new Date().toISOString()
@@ -763,13 +836,13 @@ module.exports = {
             }
 
             logger.info(`${logger.safeColor(logger.colors.green)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Password reset successful for ${user.email}`);
+            
+            // Set authentication tokens as httpOnly cookies
+            setTokenCookies(res, tokens.accessToken, tokens.refreshToken);
+            
             res.status(200).json({
                 success: true,
                 message: 'Password has been reset successfully',
-                authentication: {
-                    accessToken: tokens.accessToken,
-                    refreshToken: tokens.refreshToken
-                },
                 user: formatUserResponse(user),
                 meta: {
                     timestamp: new Date().toISOString()
@@ -789,10 +862,10 @@ module.exports = {
             userId: req.user?.id, ip: req.ip
         });
         try {
-            const authHeader = req.headers.authorization;
-            if (authHeader && authHeader.startsWith('Bearer ')) {
-                const token = authHeader.substring(7);
-
+            // Get token from cookies (since we're no longer supporting header tokens)
+            const token = req.cookies?.accessToken;
+            
+            if (token) {
                 // Add token to blacklist with remaining TTL
                 const decoded = jwt.decode(token);
                 if (decoded && decoded.exp) {
@@ -803,15 +876,15 @@ module.exports = {
                     }
                 }
 
-                // Clear user session cache
-                const sessionPattern = `auth:session:${req.user.id}:*`;
-                await cache.delPattern(sessionPattern);
-
-                // Clear user profile cache
-                await cache.del(`user:profile:${req.user.id}`);
+                // Use sophisticated cache invalidation for logout
+                await cache.invalidateUserCaches(req.user.id);
             }
 
             logger.info(`${logger.safeColor(logger.colors.green)}[Auth Controller]${logger.safeColor(logger.colors.reset)} User logged out successfully`, {userId: req.user?.id});
+            
+            // Clear authentication token cookies
+            clearTokenCookies(res);
+            
             res.status(200).json({
                 success: true,
                 message: 'Logged out successfully',
@@ -876,8 +949,8 @@ module.exports = {
 
         // Generate a secret for the user
         const secret = speakeasy.generateSecret({
-            name: `${process.env.APP_NAME || 'App Base'} (${user.email})`,
-            issuer: process.env.APP_NAME || 'App Base',
+            name: `${process.env.APP_NAME} (${user.email})`,
+            issuer: process.env.APP_NAME,
             length: 32
         });
 
@@ -950,11 +1023,9 @@ module.exports = {
         user.twoFactorBackupCodes = hashedBackupCodes;
         await user.save();
 
-        // Clean up temporary secret
+        // Clean up temporary secret and invalidate user caches
         await cache.del(`auth:2fa:temp_secret:${userId}`);
-
-        // Clear user profile cache
-        await cache.del(`user:profile:${userId}`);
+        await cache.invalidateUserCaches(userId);
 
         logger.info('2FA setup completed successfully', {userId});
 
@@ -1009,8 +1080,8 @@ module.exports = {
         user.twoFactorBackupCodes = undefined;
         await user.save();
 
-        // Clear user profile cache
-        await cache.del(`user:profile:${userId}`);
+        // Use sophisticated cache invalidation for user profile update
+        await cache.invalidateUserCaches(userId);
 
         logger.info('2FA disabled successfully', {userId});
 
@@ -1170,19 +1241,19 @@ module.exports = {
         await user.save({validateBeforeSave: false});
 
         // Create verification URL
-        const verificationUrl = `${process.env.APP_URL || 'http://localhost:8080'}/verify-email/${verificationToken}`;
+        const verificationUrl = `${process.env.APP_URL}/verify-email/${verificationToken}`;
 
         try {
             // Send verification email
             await sendEmail({
                 to: targetEmail,
-                subject: `Verify your email address - ${process.env.APP_NAME || 'App Base'}`,
+                subject: `Verify your email address - ${process.env.APP_NAME}`,
                 template: 'email-verification',
                 data: {
                     userName: user.firstName || user.username,
                     verificationUrl: verificationUrl,
-                    appName: process.env.APP_NAME || 'App Base',
-                    supportEmail: process.env.EMAIL_FROM || 'support@example.com'
+                    appName: process.env.APP_NAME,
+                    supportEmail: process.env.EMAIL_FROM
                 }
             }, getEmailTransporter());
 
@@ -1242,8 +1313,8 @@ module.exports = {
         user.emailVerificationExpires = undefined;
         await user.save();
 
-        // Clear user profile cache
-        await cache.del(`user:profile:${user.id}`);
+        // Use sophisticated cache invalidation for user profile update
+        await cache.invalidateUserCaches(user.id);
 
         logger.info('Email verification successful', {userId: user.id, email: user.email});
 
@@ -1311,11 +1382,8 @@ module.exports = {
 
         await user.save();
 
-        // Clear user caches
-        await cache.del(`user:profile:${userId}`);
-        await cache.del('users:list:all');
-        // Clear pending requests cache since we just approved/removed a request
-        await cache.del('roles:pending');
+        // Use sophisticated cache invalidation for role changes
+        await cache.invalidateAllRelatedCaches('user', userId, userId);
 
         logger.info('[Auth Controller - Role Approval] Role request approved successfully:', {
             userId,
@@ -1372,11 +1440,8 @@ module.exports = {
 
         await user.save();
 
-        // Clear user caches
-        await cache.del(`user:profile:${userId}`);
-        await cache.del('users:list:all');
-        // Clear pending requests cache since we just rejected/removed a request
-        await cache.del('roles:pending');
+        // Use sophisticated cache invalidation for role changes
+        await cache.invalidateAllRelatedCaches('user', userId, userId);
 
         logger.info('[Auth Controller - Role Rejection] Role request rejected successfully:', {
             userId,
@@ -1459,11 +1524,8 @@ module.exports = {
 
         await user.save();
 
-        // Clear user caches
-        await cache.del(`user:profile:${requesterId}`);
-        await cache.del('users:list:all');
-        // Clear pending requests cache since we just added a new request
-        await cache.del('roles:pending');
+        // Use sophisticated cache invalidation for role elevation request
+        await cache.invalidateAllRelatedCaches('user', requesterId, requesterId);
 
         logger.info('[Auth Controller - Role Elevation] Role elevation request submitted successfully:', {
             requesterId,
@@ -1516,6 +1578,52 @@ module.exports = {
             pendingRequests: pendingRequests,
             totalCount: pendingRequests.length
         });
+    }),
+
+    /**
+     * Get WebSocket token for cross-origin authentication
+     */
+    getWebSocketToken: asyncHandler(async (req, res, next) => {
+        logger.info(`${logger.safeColor(logger.colors.cyan)}[Auth Controller]${logger.safeColor(logger.colors.reset)} WebSocket token request received...`, {
+            userId: req.user.id,
+            ip: req.ip
+        });
+
+        try {
+            // Generate a short-lived token specifically for WebSocket authentication
+            const wsTokenData = {
+                id: req.user.id,
+                username: req.user.username,
+                firstName: req.user.firstName,
+                lastName: req.user.lastName,
+                email: req.user.email,
+                roles: normalizeRoles(req.user.roles),
+                type: 'websocket'
+            };
+
+            // Create a short-lived token (5 minutes) for WebSocket connection
+            const wsToken = jwt.sign(wsTokenData, process.env.ACCESS_TOKEN_SECRET, { 
+                expiresIn: '5m' 
+            });
+
+            logger.info(`${logger.safeColor(logger.colors.green)}[Auth Controller]${logger.safeColor(logger.colors.reset)} WebSocket token generated successfully`, {
+                userId: req.user.id
+            });
+
+            res.status(200).json({
+                success: true,
+                message: 'WebSocket token generated successfully',
+                token: wsToken
+            });
+
+        } catch (error) {
+            logger.error(`${logger.safeColor(logger.colors.red)}[Auth Controller]${logger.safeColor(logger.colors.reset)} WebSocket token generation error:`, {
+                userId: req.user.id,
+                error: error.message
+            });
+
+            return next(new AppError('Failed to generate WebSocket token', 500));
+        }
     })
 }
 

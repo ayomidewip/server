@@ -63,10 +63,11 @@ exports.authSchemas = {
     }),
 
     refreshToken: Joi.object({
-        token: Joi.string().required()
-            .messages({
-                'any.required': 'Refresh token is required'
-            })
+        // No body parameters needed - refresh token comes from cookies only
+    }),
+
+    logout: Joi.object({
+        // No body parameters needed - logout uses token from cookies and middleware
     })
 };
 
@@ -106,7 +107,8 @@ exports.userSchemas = {
         username: Joi.string().min(3).max(30).pattern(/^[a-zA-Z0-9_]+$/),
         email: Joi.string().email(),
         profilePhoto: Joi.string(),
-        roles: Joi.array().items(Joi.string().valid(...VALID_ROLES))
+        roles: Joi.array().items(Joi.string().valid(...VALID_ROLES)),
+        active: Joi.boolean()
     }).min(1),
 
     changePassword: Joi.object({
@@ -268,12 +270,6 @@ exports.filterSchemas = {
                 'number.min': 'Maximum response time must be greater than or equal to minimum response time'
             }),
 
-        // Request type
-        requestType: Joi.string().pattern(/^[A-Z,\s]+$/)
-            .messages({
-                'string.pattern.base': 'Request type must contain only uppercase letters, commas, and spaces'
-            }),
-
         // IP address
         ip: Joi.alternatives().try(
             Joi.string().ip(),
@@ -322,7 +318,6 @@ exports.filterSchemas = {
             level: Joi.string().pattern(/^[a-z,\s]+$/),
             minResponseTime: Joi.number().min(0),
             maxResponseTime: Joi.number(),
-            requestType: Joi.string().pattern(/^[A-Z,\s]+$/),
             ip: Joi.alternatives().try(
                 Joi.string().ip(),
                 Joi.string().pattern(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(,\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})*$/)
@@ -439,18 +434,9 @@ exports.fileSchemas = {
             .messages({
                 'any.required': 'File path is required'
             }),
-        fileName: Joi.string().min(1).max(255).required()
-            .messages({
-                'string.min': 'File name cannot be empty',
-                'string.max': 'File name cannot exceed 255 characters',
-                'any.required': 'File name is required'
-            }),
         content: Joi.string().allow('').default(''),
-        fileType: Joi.string().max(10),
-        description: Joi.string().max(500),
+        description: Joi.string().allow('').max(500),
         tags: Joi.array().items(Joi.string().trim().max(50)).max(10),
-        maxVersions: Joi.number().integer().min(1).max(50).default(10),
-        isPermanent: Joi.boolean().default(true),
         permissions: Joi.object({
             read: Joi.array().items(Joi.objectId()),
             write: Joi.array().items(Joi.objectId())
@@ -471,8 +457,7 @@ exports.fileSchemas = {
             .messages({
                 'any.required': 'Content is required to save file'
             }),
-        description: Joi.string().max(500),
-        isPermanent: Joi.boolean().default(false)
+        description: Joi.string().min(0).max(500)
     }),
 
     publishFile: Joi.object({
@@ -483,41 +468,7 @@ exports.fileSchemas = {
             })
     }),
 
-    updateFile: Joi.object({
-        fileName: Joi.string().min(1).max(255),
-        content: Joi.string().allow(''),
-        description: Joi.string().max(500).allow(''),
-        tags: Joi.array().items(Joi.string().trim().max(50)).max(10),
-        maxVersions: Joi.number().integer().min(1).max(50),
-        isPermanent: Joi.boolean(),
-        permissions: Joi.object({
-            read: Joi.array().items(Joi.string()),
-            write: Joi.array().items(Joi.string())
-        })
-    }),
-
-    deleteFile: Joi.object({
-        version: Joi.number().integer().min(0),
-        permanent: Joi.string().valid('true', 'false')
-    }).custom((value, helpers) => {
-        // Require either version or permanent=true
-        if (!value.version && value.permanent !== 'true') {
-            return helpers.message('Must specify version or set permanent=true to delete');
-        }
-        return value;
-    }),
-
-    patchFile: Joi.object({
-        version: Joi.number().integer().min(0).required()
-            .messages({
-                'any.required': 'Version number is required',
-                'number.min': 'Version must be at least 0'
-            }),
-        isPermanent: Joi.boolean().required()
-            .messages({
-                'any.required': 'isPermanent field is required'
-            })
-    }),
+    // updateFile, deleteFile, patchFile schemas removed - operations now use WebSocket
 
     autoSave: Joi.object({
         content: Joi.string().allow('').required()
@@ -531,11 +482,6 @@ exports.fileSchemas = {
             .messages({
                 'string.pattern.base': 'Directory path must be a valid filesystem path starting with /'
             })
-    }),
-
-    getDirectoryTree: Joi.object({
-        root: Joi.string().pattern(/^\/([a-zA-Z0-9._/-]*)?$/).default('/'),
-        depth: Joi.number().integer().min(1).max(10).default(5)
     }),
 
     checkPath: Joi.object({
@@ -557,31 +503,58 @@ exports.fileSchemas = {
 
     getDirectoryTree: Joi.object({
         rootPath: Joi.string().pattern(/^\/([a-zA-Z0-9._/-]*)?$/).default('/'),
-        maxDepth: Joi.number().integer().min(1).max(20).default(10),
-        includeFiles: Joi.string().valid('true', 'false').default('true')
+        includeFiles: Joi.string().valid('true', 'false').default('true'),
+        format: Joi.string().valid('array', 'object').default('object')
+            .messages({
+                'any.only': 'Format must be either "array" or "object"'
+            })
     }),
 
     getDirectoryContents: Joi.object({
+        filePath: Joi.string().pattern(/^\/([a-zA-Z0-9._/-]*[a-zA-Z0-9._-])?$/).required()
+            .messages({
+                'string.pattern.base': 'File path must be a valid filesystem path starting with /',
+                'any.required': 'File path is required'
+            }),
         sortBy: Joi.string().valid('fileName', 'fileType', 'size', 'createdAt', 'updatedAt').default('fileName'),
         sortOrder: Joi.string().valid('asc', 'desc').default('asc'),
         fileType: Joi.string().valid('file', 'directory')
     }),
 
     moveFile: Joi.object({
-        newPath: Joi.string().pattern(/^\/([a-zA-Z0-9._/-]*[a-zA-Z0-9._-])?$/).required()
+        sourcePath: Joi.filePath().required()
             .messages({
-                'string.pattern.base': 'New path must be a valid filesystem path starting with /',
-                'any.required': 'New path is required'
+                'any.required': 'Source path is required'
+            }),
+        destinationPath: Joi.filePath().required()
+            .messages({
+                'any.required': 'Destination path is required'
             })
     }),
 
     copyFile: Joi.object({
-        destinationPath: Joi.string().pattern(/^\/([a-zA-Z0-9._/-]*[a-zA-Z0-9._-])?$/).required()
+        sourcePath: Joi.filePath().required()
             .messages({
-                'string.pattern.base': 'Destination path must be a valid filesystem path starting with /',
+                'any.required': 'Source path is required'
+            }),
+        destinationPath: Joi.filePath().required()
+            .messages({
                 'any.required': 'Destination path is required'
             }),
-        includeVersionHistory: Joi.string().valid('true', 'false').default('false')
+        includeVersionHistory: Joi.boolean().default(false)
+    }),
+
+    renameFile: Joi.object({
+        newName: Joi.string().min(1).max(255)
+            .pattern(/^[^\\/:*?"<>|]+$/)
+            .pattern(/^(?!\.\.)(?!.*\.\.)[\s\S]+$/)
+            .required()
+            .messages({
+                'string.min': 'New name cannot be empty',
+                'string.max': 'New name cannot exceed 255 characters',
+                'string.pattern.base': 'New name contains invalid characters',
+                'any.required': 'New name is required'
+            })
     }),
 
     bulkOperations: Joi.object({

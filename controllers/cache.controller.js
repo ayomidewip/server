@@ -7,6 +7,16 @@ const logger = require('../utils/app.logger');
 const {cache} = require('../middleware/cache.middleware');
 const {asyncHandler} = require('../middleware/app.middleware');
 
+const cleanupIntervalHours = parseInt(process.env.CACHE_CLEANUP_INTERVAL_HOURS, 10);
+const cleanupMinAgeHours = parseInt(process.env.CACHE_CLEANUP_MIN_AGE_HOURS, 10);
+const cleanupMaxKeysPerRun = parseInt(process.env.CACHE_CLEANUP_MAX_KEYS_PER_RUN, 10);
+
+if ([cleanupIntervalHours, cleanupMinAgeHours, cleanupMaxKeysPerRun].some(
+    value => !Number.isFinite(value) || value <= 0
+)) {
+    throw new Error('[CacheCleanup] CACHE_CLEANUP_* environment variables must be positive integers');
+}
+
 /**
  * Cache Cleanup Service Class
  * Provides scheduled cleanup for cache maintenance and optimization
@@ -43,9 +53,16 @@ class CacheCleanupService {
             return;
         }
 
-        // Use environment variable or default to 24 hours (much more conservative than 60 minutes)
-        const defaultInterval = parseInt(process.env.CACHE_CLEANUP_INTERVAL_HOURS) || 24;
-        const actualInterval = intervalHours || defaultInterval;
+        // Use environment variable or provided override
+        let actualInterval = cleanupIntervalHours;
+
+        if (intervalHours != null) {
+            const overrideInterval = parseInt(intervalHours, 10);
+            if (!Number.isFinite(overrideInterval) || overrideInterval <= 0) {
+                throw new Error('[CacheCleanup] CACHE_CLEANUP_INTERVAL_OVERRIDE must be a positive integer');
+            }
+            actualInterval = overrideInterval;
+        }
         const intervalMs = actualInterval * 60 * 60 * 1000;
 
         this.isRunning = true;
@@ -74,20 +91,15 @@ class CacheCleanupService {
      * Get service statistics and configuration
      */
     getStats() {
-        const now = new Date();
-        const intervalHours = parseInt(process.env.CACHE_CLEANUP_INTERVAL_HOURS) || 24;
-        const minAgeHours = parseInt(process.env.CACHE_CLEANUP_MIN_AGE_HOURS) || 2;
-        const maxKeysPerRun = parseInt(process.env.CACHE_CLEANUP_MAX_KEYS_PER_RUN) || 500;
-
         return {
             enabled: process.env.CACHE_CLEANUP_ENABLED !== 'false',
             isRunning: this.isRunning,
-            intervalHours,
-            minAgeHours,
-            maxKeysPerRun,
+            intervalHours: cleanupIntervalHours,
+            minAgeHours: cleanupMinAgeHours,
+            maxKeysPerRun: cleanupMaxKeysPerRun,
             lastRun: this.stats.lastCleanup,
             nextRun: this.stats.lastCleanup ?
-                new Date(this.stats.lastCleanup.getTime() + (intervalHours * 60 * 60 * 1000)) :
+                new Date(this.stats.lastCleanup.getTime() + (cleanupIntervalHours * 60 * 60 * 1000)) :
                 null,
             totalRuns: this.stats.cleanupRuns,
             lastRunStats: {
@@ -116,22 +128,19 @@ class CacheCleanupService {
             }
 
             // Get configuration from environment variables
-            const minAgeHours = parseInt(process.env.CACHE_CLEANUP_MIN_AGE_HOURS) || 2;
-            const maxKeysPerRun = parseInt(process.env.CACHE_CLEANUP_MAX_KEYS_PER_RUN) || 500;
-
             let totalKeysRemoved = 0;
             let totalKeysScanned = 0;
             let totalKeysSkipped = 0;
 
             // Conservative cleanup of expired autosave data
-            totalKeysRemoved += await this.cleanupExpiredAutosave(redisClient, maxKeysPerRun, minAgeHours);
+            totalKeysRemoved += await this.cleanupExpiredAutosave(redisClient, cleanupMaxKeysPerRun, cleanupMinAgeHours);
 
             // Conservative cleanup of old orphaned keys
             const {
                 removed,
                 scanned,
                 skipped
-            } = await this.cleanupOldOrphanedKeys(redisClient, maxKeysPerRun, minAgeHours);
+            } = await this.cleanupOldOrphanedKeys(redisClient, cleanupMaxKeysPerRun, cleanupMinAgeHours);
             totalKeysRemoved += removed;
             totalKeysScanned += scanned;
             totalKeysSkipped += skipped;

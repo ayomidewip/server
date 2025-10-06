@@ -1,35 +1,11 @@
 const mongoose = require('mongoose');
 
-/**
- * Determine request type based on URL pattern
- * @param {string} url - Request URL
- * @returns {string} - Request type category
- */
-function determineRequestType(url) {
-    if (!url) return 'OTHER';
 
-    // Convert to lowercase for case-insensitive matching
-    const urlLower = url.toLowerCase();
-
-    if (urlLower.includes('/api/v1/auth/')) {
-        return 'AUTH';
-    } else if (urlLower.includes('/api/v1/users/') || urlLower.includes('/api/v1/admin/')) {
-        return 'ADMIN';
-    } else if (urlLower.includes('/health') || urlLower.includes('/api/v1/health')) {
-        return 'HEALTH';
-    } else if (urlLower.includes('/api/')) {
-        return 'API';
-    } else if (urlLower.includes('/static/') || urlLower.endsWith('.js') || urlLower.endsWith('.css') || urlLower.endsWith('.png') || urlLower.endsWith('.jpg') || urlLower.endsWith('.svg')) {
-        return 'STATIC';
-    } else {
-        return 'OTHER';
-    }
-}
 
 /**
- * Determine CRUD operation type based on HTTP method
- * @param {string} method - HTTP method (GET, POST, PUT, DELETE, etc.)
- * @returns {string} - CRUD operation type (CREATE, READ, UPDATE, DELETE, OTHER)
+ * Determine CRUD operation type based on HTTP method or WebSocket operation
+ * @param {string} method - HTTP method (GET, POST, PUT, DELETE, etc.) or WEBSOCKET
+ * @returns {string} - CRUD operation type (CREATE, READ, UPDATE, DELETE, WEBSOCKET, OTHER)
  */
 function determineOperationType(method) {
     if (!method) return 'OTHER';
@@ -47,6 +23,8 @@ function determineOperationType(method) {
             return 'UPDATE';
         case 'DELETE':
             return 'DELETE';
+        case 'WEBSOCKET':
+            return 'WEBSOCKET';
         default:
             return 'OTHER';
     }
@@ -63,8 +41,6 @@ const logSchema = new mongoose.Schema({
     }, // HTTP-specific fields
     method: {
         type: String, sparse: true, index: true
-    }, requestType: {
-        type: String, sparse: true, index: true, enum: ['API', 'STATIC', 'AUTH', 'ADMIN', 'HEALTH', 'OTHER']
     }, url: {
         type: String, sparse: true
     }, statusCode: {
@@ -117,7 +93,7 @@ const logSchema = new mongoose.Schema({
 
     // Additional metadata
     environment: {
-        type: String, default: process.env.NODE_ENV || 'development'
+        type: String, default: process.env.NODE_ENV
     }, service: {
         type: String, default: 'app-base-server'
     }, meta: {
@@ -129,11 +105,6 @@ const logSchema = new mongoose.Schema({
 
 // Pre-save middleware to add real-time data
 logSchema.pre('save', function (next) {
-    // Ensure requestType is set if URL is present
-    if (this.url && !this.requestType) {
-        this.requestType = determineRequestType(this.url);
-    }
-
     // Ensure operation type is inferred from method
     if (this.method && !this.operationType) {
         this.operationType = determineOperationType(this.method);
@@ -293,7 +264,6 @@ logSchema.statics.getLogs = async function (filters = {}, options = {}) {
 const Log = mongoose.model('Log', logSchema);
 
 // Attach utility functions to the model
-Log.determineRequestType = determineRequestType;
 Log.determineOperationType = determineOperationType;
 
 module.exports = Log;

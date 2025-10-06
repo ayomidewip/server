@@ -153,6 +153,7 @@ const cache = {
 
         try {
             const encodedFilePath = Buffer.from(filePath).toString('base64');
+            const encodedSharePath = encodeURIComponent(filePath);
             const keysToDelete = [
                 // Note: Deliberately NOT clearing `file:autosave:${encodedFilePath}` 
                 // Auto-save cache should persist until explicitly saved or replaced
@@ -162,14 +163,31 @@ const cache = {
                 `file:versions:${encodedFilePath}`
             ];
 
-            // If userId provided, also clear user-specific file caches
+            // If userId provided, also clear user-specific file caches and directory caches
             if (userId) {
                 keysToDelete.push(
-                    `user:files:${userId}:all`
+                    `user:files:${userId}:all`,
+                    `directory:tree:${userId}`,
+                    `directory:contents:${userId}:${filePath}`,
+                    `file:sharing:${encodedSharePath}:${userId}`
                 );
+
+                // Also clear any directory contents cache that might contain this file
+                // Clear parent directory contents if this is a nested file/directory
+                const pathParts = filePath.split('/');
+                for (let i = 1; i < pathParts.length; i++) {
+                    const parentPath = pathParts.slice(0, i).join('/') || '/';
+                    keysToDelete.push(`directory:contents:${userId}:${parentPath}`);
+                }
+
+                // Clear directory-related pattern caches for this user
+                await cache.delPattern(`directory:tree:${userId}*`);
+                await cache.delPattern(`directory:contents:${userId}*`);
             }
 
             await cache.delMultiple(keysToDelete);
+            // Ensure all cached sharing snapshots for this file are purged for every user
+            await cache.delPattern(`file:sharing:${encodedSharePath}:*`);
 
         } catch (err) {
             logger.error(`${logger.safeColor(logger.colors.red)}[Cache]${logger.safeColor(logger.colors.reset)} Error invalidating file caches:`, err);
@@ -191,6 +209,7 @@ const cache = {
                     // Also clear global auth-related caches
                     commonCaches.push(
                         'users:list:all',
+                        'roles:pending', // Add role-related cache
                         `user:profile:${id}`,
                         `user:files:${id}:all`
                     );
@@ -209,7 +228,14 @@ const cache = {
                         `file:versions:${id}`
                     );
                     if (userId) {
-                        commonCaches.push(`user:files:${userId}:all`);
+                        commonCaches.push(
+                            `user:files:${userId}:all`,
+                            `directory:tree:${userId}`,
+                            `directory:contents:${userId}:${id}`
+                        );
+                        
+                        // Clear any file access type caches
+                        await cache.delPattern(`user:files:by:access:${userId}:*`);
                     }
                     break;
 
@@ -432,14 +458,19 @@ const clearCache = (patterns = []) => {
                     if (Array.isArray(patternsToUse) && patternsToUse.length > 0) {
                         for (const pattern of patternsToUse) {
                             try {
-                                await cache.del(pattern);
-                                logger.info(`${logger.safeColor(logger.colors.cyan)}[Cache Middleware]${logger.safeColor(logger.colors.reset)} Cleared cache for pattern: ${pattern}`);
+                                // Use delPattern for wildcard patterns, del for exact keys
+                                if (pattern.includes('*')) {
+                                    await cache.delPattern(pattern);
+                                    logger.info(`${logger.safeColor(logger.colors.cyan)}[Cache Middleware]${logger.safeColor(logger.colors.reset)} Cleared cache for pattern: ${pattern}`);
+                                } else {
+                                    await cache.del(pattern);
+                                    logger.info(`${logger.safeColor(logger.colors.cyan)}[Cache Middleware]${logger.safeColor(logger.colors.reset)} Cleared cache for key: ${pattern}`);
+                                }
                             } catch (err) {
                                 logger.error(`${logger.safeColor(logger.colors.red)}[Cache Middleware]${logger.safeColor(logger.colors.reset)} Error clearing cache for pattern ${pattern}:`, err);
                             }
                         }
                     }
-                } else if (!cache.isEnabled()) {
                 }
             } catch (err) {
                 logger.error(`${logger.safeColor(logger.colors.red)}[Cache Middleware]${logger.safeColor(logger.colors.reset)} Error clearing cache:`, err);

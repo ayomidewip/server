@@ -1,12 +1,12 @@
-const sanitizeHtml = require('sanitize-html');
-const logger = require('../utils/app.logger');
+import sanitizeHtml from 'sanitize-html';
+import logger from '../utils/app.logger.js';
 
 /**
  * Sanitize HTML input to prevent XSS attacks
  * @param {string} input - String to sanitize
  * @returns {string} - Sanitized string with HTML tags removed/escaped
  */
-exports.sanitizeHtmlInput = (input) => {
+export const sanitizeHtmlInput = (input) => {
     if (typeof input !== 'string') {
         return input;
     }
@@ -24,14 +24,14 @@ exports.sanitizeHtmlInput = (input) => {
  * @param {any} obj - Object to sanitize
  * @returns {any} - Object with HTML content sanitized
  */
-exports.sanitizeHtmlInObject = (obj) => {
+export const sanitizeHtmlInObject = (obj) => {
     if (!obj || typeof obj !== 'object') {
-        return typeof obj === 'string' ? exports.sanitizeHtmlInput(obj) : obj;
+        return typeof obj === 'string' ? sanitizeHtmlInput(obj) : obj;
     }
 
     // Handle arrays
     if (Array.isArray(obj)) {
-        return obj.map(item => exports.sanitizeHtmlInObject(item));
+        return obj.map(item => sanitizeHtmlInObject(item));
     }
 
     // Create a sanitized copy
@@ -39,16 +39,16 @@ exports.sanitizeHtmlInObject = (obj) => {
 
     for (const [key, value] of Object.entries(obj)) {
         if (typeof value === 'string') {
-            sanitized[key] = exports.sanitizeHtmlInput(value);
+            sanitized[key] = sanitizeHtmlInput(value);
         } else if (typeof value === 'object' && value !== null) {
-            sanitized[key] = exports.sanitizeHtmlInObject(value);
+            sanitized[key] = sanitizeHtmlInObject(value);
         } else {
             sanitized[key] = value;
         }
     }
 
     return sanitized;
-}
+};
 
 /**
  * Recursively sanitize sensitive data from objects
@@ -56,14 +56,14 @@ exports.sanitizeHtmlInObject = (obj) => {
  * @param {any} obj - Object to sanitize
  * @returns {any} - Sanitized copy of the object
  */
-exports.sanitizeObject = (obj) => {
+export const sanitizeObject = (obj) => {
     if (!obj || typeof obj !== 'object') {
         return obj;
     }
 
     // Handle arrays
     if (Array.isArray(obj)) {
-        return obj.map(item => exports.sanitizeObject(item));
+        return obj.map(item => sanitizeObject(item));
     }
 
     // Create a deep clone to avoid modifying the original object
@@ -106,7 +106,7 @@ exports.sanitizeObject = (obj) => {
             }
         } else if (typeof value === 'object' && value !== null) {
             // Recursively sanitize nested objects
-            sanitized[key] = exports.sanitizeObject(value);
+            sanitized[key] = sanitizeObject(value);
         } else {
             // Copy the value as-is for non-sensitive fields
             sanitized[key] = value;
@@ -122,7 +122,7 @@ exports.sanitizeObject = (obj) => {
  * @param {number} maxSize - Maximum size in bytes
  * @returns {any} - Truncated object
  */
-exports.truncateObject = (obj, maxSize) => {
+export const truncateObject = (obj, maxSize) => {
     if (!obj || typeof obj !== 'object') return obj;
 
     try {

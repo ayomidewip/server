@@ -1,4 +1,4 @@
-const logger = require('../utils/app.logger');
+import logger from '../utils/app.logger.js';
 const {NODE_ENV} = process.env;
 
 // AppError class for operational errors
@@ -51,7 +51,7 @@ const sendErrorProd = (err, res) => {
     }
 };
 
-module.exports = (err, req, res, next) => {
+const errorMiddleware = (err, req, res, next) => {
     // Prevent multiple responses if headers have already been sent
     if (res.headersSent) {
         return next(err);
@@ -91,5 +91,5 @@ module.exports = (err, req, res, next) => {
     }
 };
 
-// Export both the error middleware and AppError class
-module.exports.AppError = AppError;
+export default errorMiddleware;
+export {AppError};

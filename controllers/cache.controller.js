@@ -3,9 +3,9 @@
  * Handles all cache-related operations including statistics, cleanup, and management
  */
 
-const logger = require('../utils/app.logger');
-const {cache} = require('../middleware/cache.middleware');
-const {asyncHandler} = require('../middleware/app.middleware');
+import logger from '../utils/app.logger.js';
+import {cache} from '../middleware/cache.middleware.js';
+import {asyncHandler, redisClient as sharedRedisClient} from '../middleware/app.middleware.js';
 
 const cleanupIntervalHours = parseInt(process.env.CACHE_CLEANUP_INTERVAL_HOURS, 10);
 const cleanupMinAgeHours = parseInt(process.env.CACHE_CLEANUP_MIN_AGE_HOURS, 10);
@@ -120,7 +120,7 @@ class CacheCleanupService {
         logger.info('[CacheCleanup] Starting conservative cache cleanup...');
 
         try {
-            const {redisClient} = require('../middleware/app.middleware');
+            const redisClient = sharedRedisClient;
 
             if (!redisClient || !redisClient.isReady) {
                 logger.warn('[CacheCleanup] Redis client not available, skipping cleanup');
@@ -329,7 +329,7 @@ const cleanupService = new CacheCleanupService();
 const getCacheStats = asyncHandler(async (req, res, next) => {
     try {
         // Get Redis server info through appMiddleware
-        const redisClient = require('../middleware/app.middleware').redisClient;
+    const redisClient = sharedRedisClient;
 
         if (!redisClient || !redisClient.isReady) {
             return res.status(503).json({success: false, message: 'Redis cache is not available'});
@@ -397,7 +397,7 @@ const getCacheStats = asyncHandler(async (req, res, next) => {
  */
 const clearCache = asyncHandler(async (req, res, next) => {
     try {
-        const {redisClient} = require('../middleware/app.middleware');
+    const redisClient = sharedRedisClient;
 
         logger.info('Clearing Redis cache and resetting all statistics...');
 
@@ -495,7 +495,7 @@ const getCacheHealth = asyncHandler(async (req, res, next) => {
     }
 });
 
-module.exports = {
+export {
     getCacheStats,
     clearCache,
     getCleanupStatus,

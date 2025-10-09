@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 
 
@@ -117,7 +117,7 @@ logSchema.pre('save', function (next) {
 logSchema.post('save', async function (doc) {
     try {
         // Import cache utility (delayed to avoid circular dependencies)
-        const {cache} = require('../middleware/cache.middleware');
+        const {cache} = await import('../middleware/cache.middleware.js');
 
         // Invalidate log-related caches
         await cache.invalidateAllRelatedCaches('log', doc._id.toString());
@@ -145,7 +145,7 @@ logSchema.index({timestamp: 1}, {expireAfterSeconds: 30 * 24 * 60 * 60});
 logSchema.statics.createLog = async function (logData) {
     try {
         // Import sanitizeObject from the utility module
-        const {sanitizeObject, truncateObject} = require('../utils/sanitize');
+        const {sanitizeObject, truncateObject} = await import('../utils/sanitize.js');
 
         // Make a copy of logData to avoid modifying the original
         const sanitizedLogData = {...logData};
@@ -261,9 +261,10 @@ logSchema.statics.getLogs = async function (filters = {}, options = {}) {
 };
 
 // Export model with added utility functions
-const Log = mongoose.model('Log', logSchema);
+// Check if model exists to prevent recompilation errors in tests
+const Log = mongoose.models.Log || mongoose.model('Log', logSchema);
 
 // Attach utility functions to the model
 Log.determineOperationType = determineOperationType;
 
-module.exports = Log;
+export default Log;

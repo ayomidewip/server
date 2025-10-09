@@ -1,18 +1,23 @@
-const File = require('../models/file.model');
-const {asyncHandler} = require('../middleware/app.middleware');
-const {AppError} = require('../middleware/error.middleware');
-const {hasRight, RIGHTS} = require('../config/rights');
-const {cache} = require('../middleware/cache.middleware');
-const logger = require('../utils/app.logger');
-const {sanitizeHtmlInObject} = require('../utils/sanitize');
-const crypto = require('crypto');
-const mongoose = require('mongoose');
-const path = require('path');
-const {parseFilters} = require('./app.controller');
-const {getCompressionStats, compressFileBuffer, decompressFileBuffer} = require('../middleware/file.middleware');
-
-// Import Yjs service from middleware
-const { getYjsService, getFileNotificationService, FILE_EVENTS } = require('../middleware/file.middleware');
+import File from '../models/file.model.js';
+import {asyncHandler} from '../middleware/app.middleware.js';
+import {AppError} from '../middleware/error.middleware.js';
+import {hasRight, RIGHTS} from '../config/rights.js';
+import {cache} from '../middleware/cache.middleware.js';
+import logger from '../utils/app.logger.js';
+import {sanitizeHtmlInObject} from '../utils/sanitize.js';
+import crypto from 'node:crypto';
+import mongoose from 'mongoose';
+import path from 'node:path';
+import {parseFilters} from './app.controller.js';
+import {
+    getCompressionStats,
+    compressFileBuffer,
+    decompressFileBuffer,
+    getYjsService,
+    getFileNotificationService,
+    FILE_EVENTS
+} from '../middleware/file.middleware.js';
+import {renameInGridFS} from '../config/db.js';
 const yjsService = getYjsService();
 
 // Import notification service from file middleware
@@ -234,7 +239,7 @@ const respondWithOperation = (res, result, defaultStatus = 200) => {
  * Simplified File Controller
  * Handles file operations with single-document-per-file approach
  */
-module.exports = {
+const fileController = {
     /**
      * @desc    Get file system health status
      * @route   GET /api/v1/files/health
@@ -2935,7 +2940,6 @@ async function executeFileOperation(operation, data, userId, userRoles = []) {
                 // For binary files, rename in GridFS before updating the database record
                 if (moveFile.type === 'binary' && moveFile.gridFSId) {
                     try {
-                        const { renameInGridFS } = require('../config/db');
                         await renameInGridFS(sourcePath, newFilePath);
                     } catch (error) {
                         // Don't fail the operation, but log the issue
@@ -3304,7 +3308,6 @@ async function executeFileOperation(operation, data, userId, userRoles = []) {
                 // For binary files, rename in GridFS before updating the database record
                 if (renameFile.type === 'binary' && renameFile.gridFSId) {
                     try {
-                        const { renameInGridFS } = require('../config/db');
                         await renameInGridFS(effectiveFilePath, renamedFilePath);
                     } catch (error) {
                         logger.error('Failed to rename file in GridFS during rename:', {
@@ -3467,6 +3470,5 @@ async function executeFileOperation(operation, data, userId, userRoles = []) {
     }
 };
 
-module.exports.executeFileOperation = executeFileOperation;
-module.exports.yjsService = yjsService;
-module.exports.normalizeFilePath = normalizeFilePath;
+export {fileController, executeFileOperation, yjsService, normalizeFilePath};
+export default fileController;

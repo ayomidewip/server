@@ -1,5 +1,5 @@
-const {Joi, password} = require('../utils/validator');
-const {ROLES} = require('../config/rights');
+import {Joi, password} from '../utils/validator.js';
+import {ROLES} from '../config/rights.js';
 
 // Get all valid roles as an array for validation
 const VALID_ROLES = Object.values(ROLES);
@@ -8,7 +8,7 @@ const VALID_ROLES = Object.values(ROLES);
  * Standardize and validate schema for requests received
  */
 
-exports.authSchemas = {
+export const authSchemas = {
     signup: Joi.object({
         firstName: Joi.string().min(2).max(50).required()
             .messages({
@@ -71,7 +71,7 @@ exports.authSchemas = {
     })
 };
 
-exports.userSchemas = {
+export const userSchemas = {
     userId: Joi.object({
         id: Joi.objectId().required()
     }),
@@ -126,7 +126,7 @@ exports.userSchemas = {
 };
 
 // Filter validation schemas for stats endpoints
-exports.filterSchemas = {
+export const filterSchemas = {
     // Common filter parameters
     common: Joi.object({
         // Date range filters
@@ -333,7 +333,7 @@ exports.filterSchemas = {
 };
 
 // Statistics schemas
-exports.statsSchemas = {
+export const statsSchemas = {
     userStats: Joi.object({
         // Time period filters
         period: Joi.string().pattern(/^\d+[dhwmy]$/),  // e.g., 30d, 12h, 2w, 6m, 1y
@@ -377,7 +377,7 @@ exports.statsSchemas = {
 };
 
 // Application statistics schemas
-exports.appStatsSchemas = {
+export const appStatsSchemas = {
     overview: Joi.object({
         // Time period filters
         period: Joi.string().pattern(/^\d+[dhwmy]$/),  // e.g., 30d, 12h, 2w, 6m, 1y
@@ -408,7 +408,7 @@ exports.appStatsSchemas = {
 };
 
 // File management schemas
-exports.fileSchemas = {
+export const fileSchemas = {
     getFiles: Joi.object({
         page: Joi.number().integer().min(1).default(1),
         limit: Joi.alternatives().try(Joi.number().integer().min(1).max(100), Joi.string().valid('all'), Joi.number().valid(-1)).default(10),
@@ -615,7 +615,7 @@ exports.fileSchemas = {
 };
 
 // File parameter schemas (for URL params)
-exports.fileParamSchemas = {
+export const fileParamSchemas = {
     filePath: Joi.object({
         filePath: Joi.filePath().required()
             .messages({
@@ -646,7 +646,7 @@ exports.fileParamSchemas = {
 };
 
 // Two-Factor Authentication Schemas
-exports.twoFactorSchemas = {
+export const twoFactorSchemas = {
     verifySetup: Joi.object({
         token: Joi.string().length(6).pattern(/^\d+$/).required()
             .messages({
@@ -680,7 +680,7 @@ exports.twoFactorSchemas = {
 };
 
 // Email Verification Schemas
-exports.emailVerificationSchemas = {
+export const emailVerificationSchemas = {
     sendVerification: Joi.object({
         email: Joi.string().email().optional()
             .messages({
@@ -698,7 +698,7 @@ exports.emailVerificationSchemas = {
 };
 
 // Update auth schemas to include 2FA token
-exports.authSchemas.login = Joi.object({
+authSchemas.login = Joi.object({
     identifier: Joi.string().required()
         .messages({
             'string.empty': 'Email or username is required',

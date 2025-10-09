@@ -1,9 +1,9 @@
-const multer = require('multer');
-const path = require('path');
-const zlib = require('zlib');
-const {promisify} = require('util');
-const File = require('../models/file.model');
-const logger = require('../utils/app.logger');
+import multer from 'multer';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import {promisify} from 'node:util';
+import File from '../models/file.model.js';
+import logger from '../utils/app.logger.js';
 
 // File Event Types for WebSocket Notifications
 const FILE_EVENTS = {
@@ -42,9 +42,13 @@ const FILE_EVENTS = {
 };
 
 // Yjs imports for collaborative editing
-const Y = require('yjs');
-const { MongodbPersistence } = require('y-mongodb-provider');
-const { RedisAdapter } = require('y-redis');
+import * as Y from 'yjs';
+import { MongodbPersistence } from 'y-mongodb-provider';
+import { RedisPersistence } from 'y-redis';
+import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken';
+import WebSocket from 'ws';
+import {redisClient} from './app.middleware.js';
 
 // Promisify zlib functions for async/await usage
 const gzip = promisify(zlib.gzip);
@@ -490,28 +494,58 @@ const getCompressionStats = (originalSize, compressedSize, algorithm) => {
 class YjsRedisAdapter {
     constructor(redisClient, options = {}) {
         this.redisClient = redisClient;
-        this.subscriberClient = null;
-        this.publisherClient = null;
-        this.adapters = new Map(); // docName -> RedisAdapter
+        this.persistence = null;
+        this.documents = new Map(); // docName -> PersistenceDoc
         this.isEnabled = options.enabled !== false;
         this.prefix = options.prefix || 'yjs:';
-        
-        // Configuration
+
         this.config = {
-            reconnectInterval: options.reconnectInterval || 5000,
-            maxReconnectAttempts: options.maxReconnectAttempts || 10,
             channelPrefix: options.channelPrefix || 'yjs-doc:',
+            redisOpts: options.redisOpts,
             ...options
         };
-        
-        this.reconnectAttempts = 0;
-        this.isConnected = false;
+
         this.isInitialized = false;
+        this.isConnected = false;
     }
 
-    /**
-     * Initialize Redis pub/sub clients for Yjs
-     */
+    getRedisOptions() {
+        if (this.config.redisOpts) {
+            return this.config.redisOpts;
+        }
+
+        const clientOptions = this.redisClient?.options ?? {};
+        const {url, socket = {}, username, password, database} = clientOptions;
+
+        if (url) {
+            return {url};
+        }
+
+        const redisOpts = {};
+
+        if (socket.host) {
+            redisOpts.host = socket.host;
+        }
+
+        if (socket.port) {
+            redisOpts.port = socket.port;
+        }
+
+        if (username) {
+            redisOpts.username = username;
+        }
+
+        if (password) {
+            redisOpts.password = password;
+        }
+
+        if (typeof database === 'number') {
+            redisOpts.db = database;
+        }
+
+        return redisOpts;
+    }
+
     async initialize() {
         if (this.isInitialized) {
             logger.warn('[YjsRedisAdapter] Already initialized');
@@ -524,169 +558,60 @@ class YjsRedisAdapter {
         }
 
         try {
-            // Create separate Redis clients for pub/sub (required by Redis)
-            this.publisherClient = this.redisClient.duplicate();
-            this.subscriberClient = this.redisClient.duplicate();
-
-            // Connect both clients
-            await Promise.all([
-                this.publisherClient.connect(),
-                this.subscriberClient.connect()
-            ]);
-
-            this.isConnected = true;
+            const redisOpts = this.getRedisOptions();
+            this.persistence = new RedisPersistence({redisOpts});
             this.isInitialized = true;
-            this.reconnectAttempts = 0;
-
-            // Setup error handlers
-            this.setupErrorHandlers();
-
+            this.isConnected = true;
+            logger.info('[YjsRedisAdapter] Redis persistence initialized for Yjs scaling');
         } catch (error) {
-            logger.error('[YjsRedisAdapter] Failed to initialize Redis pub/sub clients:', {
+            logger.error('[YjsRedisAdapter] Failed to initialize Redis persistence:', {
                 error: error.message,
                 stack: error.stack
             });
-            
-            // Cleanup on failure
             await this.cleanup();
             throw error;
         }
     }
 
-    /**
-     * Setup error handlers for Redis clients
-     */
-    setupErrorHandlers() {
-        const handleError = (client, type) => (error) => {
-            logger.error(`[YjsRedisAdapter] Redis ${type} client error:`, {
-                error: error.message,
-                type,
-                isConnected: this.isConnected
-            });
-            
-            this.isConnected = false;
-            this.scheduleReconnect();
-        };
-
-        this.publisherClient.on('error', handleError(this.publisherClient, 'publisher'));
-        this.subscriberClient.on('error', handleError(this.subscriberClient, 'subscriber'));
-
-        // Handle reconnection events
-        const handleReconnect = (type) => () => {
-            logger.info(`[YjsRedisAdapter] Redis ${type} client reconnected`);
-            this.isConnected = true;
-            this.reconnectAttempts = 0;
-        };
-
-        this.publisherClient.on('connect', handleReconnect('publisher'));
-        this.subscriberClient.on('connect', handleReconnect('subscriber'));
-    }
-
-    /**
-     * Schedule reconnection attempt
-     */
-    scheduleReconnect() {
-        if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-            logger.error('[YjsRedisAdapter] Max reconnection attempts reached, giving up');
-            return;
-        }
-
-        this.reconnectAttempts++;
-        
-        setTimeout(async () => {
-            try {
-                logger.info(`[YjsRedisAdapter] Attempting reconnection (${this.reconnectAttempts}/${this.config.maxReconnectAttempts})`);
-                await this.initialize();
-            } catch (error) {
-                logger.error('[YjsRedisAdapter] Reconnection attempt failed:', error.message);
-            }
-        }, this.config.reconnectInterval);
-    }
-
-    /**
-     * Create or get Redis adapter for a specific document
-     */
     async getAdapter(docName) {
-        if (!this.isEnabled || !this.isInitialized || !this.isConnected) {
-            // Return null to indicate Redis is not available - fall back to local-only
+        if (!this.isEnabled || !this.isInitialized || !this.persistence) {
             return null;
         }
 
-        if (this.adapters.has(docName)) {
-            return this.adapters.get(docName);
-        }
-
-        try {
-            const channel = `${this.config.channelPrefix}${docName}`;
-            
-            // Create Redis adapter for this document
-            const adapter = new RedisAdapter(
-                this.publisherClient, 
-                this.subscriberClient, 
-                channel
-            );
-
-            this.adapters.set(docName, adapter);
-
-            return adapter;
-
-        } catch (error) {
-            logger.error('[YjsRedisAdapter] Failed to create adapter for document:', {
-                docName,
-                error: error.message
-            });
-            return null;
-        }
+        return this.documents.get(docName) ?? null;
     }
 
-    /**
-     * Remove adapter for a document (cleanup when document is no longer active)
-     */
     async removeAdapter(docName) {
-        if (!this.adapters.has(docName)) {
+        const adapter = this.documents.get(docName);
+        if (!adapter) {
             return;
         }
 
         try {
-            const adapter = this.adapters.get(docName);
-            
-            // Cleanup the adapter
-            if (adapter && typeof adapter.destroy === 'function') {
+            if (typeof adapter.destroy === 'function') {
                 await adapter.destroy();
             }
-            
-            this.adapters.delete(docName);
-
         } catch (error) {
             logger.error('[YjsRedisAdapter] Error removing adapter:', {
                 docName,
                 error: error.message
             });
+        } finally {
+            this.documents.delete(docName);
         }
     }
 
-    /**
-     * Bind Redis adapter to a Yjs document
-     */
     async bindDocument(docName, ydoc) {
-        if (!this.isEnabled || !this.isInitialized || !this.isConnected) {
+        if (!this.isEnabled || !this.isInitialized || !this.persistence) {
             return null;
         }
 
         try {
-            const adapter = await this.getAdapter(docName);
-            
-            if (!adapter) {
-                return null;
-            }
-
-            // Bind the adapter to the Yjs document
-            adapter.bindYDoc(ydoc);
-
-            return adapter;
-
+            const persistenceDoc = this.persistence.bindState(docName, ydoc);
+            this.documents.set(docName, persistenceDoc);
+            return persistenceDoc;
         } catch (error) {
-            logger.error('[YjsRedisAdapter] Failed to bind document to Redis adapter:', {
+            logger.error('[YjsRedisAdapter] Failed to bind document to Redis persistence:', {
                 docName,
                 error: error.message
             });
@@ -694,136 +619,92 @@ class YjsRedisAdapter {
         }
     }
 
-    /**
-     * Unbind and cleanup adapter for a document
-     */
     async unbindDocument(docName, ydoc) {
+        if (!this.documents.has(docName)) {
+            return;
+        }
+
         try {
-            const adapter = this.adapters.get(docName);
-            
-            if (adapter && ydoc) {
-                // Unbind from Yjs document
-                if (typeof adapter.unbindYDoc === 'function') {
-                    adapter.unbindYDoc(ydoc);
-                }
-            }
-
-            // Remove the adapter
             await this.removeAdapter(docName);
-
+            if (this.persistence && typeof this.persistence.closeDoc === 'function') {
+                await this.persistence.closeDoc(docName);
+            }
         } catch (error) {
             logger.error('[YjsRedisAdapter] Error unbinding document:', {
                 docName,
+                hasYDoc: !!ydoc,
                 error: error.message
             });
         }
     }
 
-    /**
-     * Get adapter statistics
-     */
     getStats() {
         return {
             isEnabled: this.isEnabled,
             isInitialized: this.isInitialized,
-            isConnected: this.isConnected,
-            activeAdapters: this.adapters.size,
-            reconnectAttempts: this.reconnectAttempts,
-            maxReconnectAttempts: this.config.maxReconnectAttempts,
-            documents: Array.from(this.adapters.keys())
+            isConnected: this.isConnected && !!this.persistence,
+            activeAdapters: this.documents.size,
+            reconnectAttempts: 0,
+            maxReconnectAttempts: 0,
+            documents: Array.from(this.documents.keys())
         };
     }
 
-    /**
-     * Health check for the Redis adapter
-     */
     async healthCheck() {
+        if (!this.isEnabled) {
+            return {status: 'disabled', message: 'Redis pub/sub is disabled'};
+        }
+
+        if (!this.isInitialized || !this.persistence) {
+            return {status: 'not_initialized', message: 'Redis persistence not initialized'};
+        }
+
         try {
-            if (!this.isEnabled) {
-                return { status: 'disabled', message: 'Redis pub/sub is disabled' };
+            if (typeof this.redisClient?.ping === 'function') {
+                await this.redisClient.ping();
             }
-
-            if (!this.isInitialized) {
-                return { status: 'not_initialized', message: 'Redis pub/sub not initialized' };
-            }
-
-            if (!this.isConnected) {
-                return { status: 'disconnected', message: 'Redis pub/sub clients disconnected' };
-            }
-
-            // Test both clients
-            await Promise.all([
-                this.publisherClient.ping(),
-                this.subscriberClient.ping()
-            ]);
 
             return {
                 status: 'healthy',
-                message: 'Redis pub/sub is operational',
+                message: 'Redis persistence is operational',
                 stats: this.getStats()
             };
-
         } catch (error) {
             return {
                 status: 'unhealthy',
-                message: `Redis pub/sub health check failed: ${error.message}`,
+                message: `Redis health check failed: ${error.message}`,
                 error: error.message
             };
         }
     }
 
-    /**
-     * Cleanup all adapters and close Redis connections
-     */
     async cleanup() {
-        try {
-            // Cleanup all adapters
-            const cleanupPromises = Array.from(this.adapters.entries()).map(async ([docName, adapter]) => {
-                try {
-                    if (adapter && typeof adapter.destroy === 'function') {
-                        await adapter.destroy();
-                    }
-                } catch (error) {
-                    logger.warn(`[YjsRedisAdapter] Error cleaning up adapter for ${docName}:`, error.message);
+        const adapters = Array.from(this.documents.entries());
+        for (const [docName, adapter] of adapters) {
+            try {
+                if (adapter && typeof adapter.destroy === 'function') {
+                    await adapter.destroy();
                 }
-            });
-
-            await Promise.all(cleanupPromises);
-            this.adapters.clear();
-
-            // Close Redis connections
-            const closePromises = [];
-            
-            if (this.publisherClient) {
-                closePromises.push(this.publisherClient.quit().catch(err => 
-                    logger.warn('[YjsRedisAdapter] Error closing publisher client:', err.message)
-                ));
+            } catch (error) {
+                logger.warn(`[YjsRedisAdapter] Error cleaning up adapter for ${docName}:`, error.message);
             }
-            
-            if (this.subscriberClient) {
-                closePromises.push(this.subscriberClient.quit().catch(err => 
-                    logger.warn('[YjsRedisAdapter] Error closing subscriber client:', err.message)
-                ));
-            }
-
-            await Promise.all(closePromises);
-
-            this.publisherClient = null;
-            this.subscriberClient = null;
-            this.isConnected = false;
-            this.isInitialized = false;
-
-        } catch (error) {
-            logger.error('[YjsRedisAdapter] Error during cleanup:', {
-                error: error.message,
-                stack: error.stack
-            });
         }
+
+        this.documents.clear();
+
+        if (this.persistence) {
+            try {
+                await this.persistence.destroy();
+            } catch (error) {
+                logger.warn('[YjsRedisAdapter] Error destroying Redis persistence:', error.message);
+            }
+        }
+
+        this.persistence = null;
+        this.isInitialized = false;
+        this.isConnected = false;
     }
 
-    /**
-     * Destroy the adapter (alias for cleanup)
-     */
     async destroy() {
         await this.cleanup();
     }
@@ -902,8 +783,6 @@ class YjsService {
             this.validateConfig();
             
             // Get existing Mongoose connection to reuse it
-            const mongoose = require('mongoose');
-            
             if (mongoose.connection.readyState === 1) {
                 // Use existing Mongoose connection for Y-MongoDB provider
                 const mongoClient = mongoose.connection.getClient();
@@ -935,8 +814,6 @@ class YjsService {
             // Initialize Redis pub/sub adapter for scaling
             if (this.config.redisEnabled) {
                 try {
-                    const { redisClient } = require('./app.middleware');
-                    
                     this.redisAdapter = new YjsRedisAdapter(redisClient, {
                         enabled: this.config.redisEnabled,
                         prefix: this.config.redisPrefix,
@@ -1064,7 +941,6 @@ class YjsService {
             if (this.persistence && hasContent) {
                 try {
                     // Access MongoDB Yjs collection directly to get document metadata
-                    const mongoose = require('mongoose');
                     if (mongoose.connection.readyState === 1) {
                         const db = mongoose.connection.db;
                         const yjsCollection = db.collection(this.config.collectionName);
@@ -1433,9 +1309,8 @@ class FileNotificationService {
      */
     async handleConnection(ws, req) {
         try {
-            // Import JWT here to avoid circular dependencies
-            const jwt = require('jsonwebtoken');
-            
+            // JWT is available via top-level import
+
             // Extract token from query parameters or headers
             const url = new URL(req.url, `http://${req.headers.host}`);
             const token = url.searchParams.get('token') || req.headers.authorization?.replace('Bearer ', '');
@@ -1531,7 +1406,6 @@ class FileNotificationService {
      * Send notification to specific user
      */
     sendToUser(userId, notification) {
-        const WebSocket = require('ws');
         const userConnections = this.connections.get(userId);
         if (userConnections && userConnections.size > 0) {
             userConnections.forEach(ws => {
@@ -1566,7 +1440,6 @@ class FileNotificationService {
      */
     sendToConnection(ws, notification) {
         try {
-            const WebSocket = require('ws');
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     ...notification,
@@ -1688,7 +1561,7 @@ if (!process.listenerCount('SIGINT')) {
     process.on('SIGINT', gracefulShutdown);
 }
 
-module.exports = {
+export {
     // Core upload functionality
     upload,
 

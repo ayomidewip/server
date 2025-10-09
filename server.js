@@ -3,29 +3,46 @@
  * Provides a complete server instance with database connections, middleware and routes.
  */
 
-const express = require('express');
-const path = require('path');
-const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-const http = require('http');
+import express from 'express';
+import path from 'node:path';
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import http from 'node:http';
+import WebSocket from 'ws';
+import * as Y from 'yjs';
+import {setupWSConnection, setPersistence, docs} from '@y/websocket-server/utils';
 
-// Load environment variables FIRST before importing logger
+// Load environment variables FIRST before importing other local modules
 dotenv.config({path: path.resolve(process.cwd(), '.env')});
 
-const {connectDB} = require('./config/db');
-const errorHandler = require('./middleware/error.middleware');
-const appMiddleware = require('./middleware/app.middleware');
-const appController = require('./controllers/app.controller');
-const {noCacheResponse} = require('./middleware/cache.middleware');
-const logger = require('./utils/app.logger'); // Now imported AFTER env vars are loaded
-const {redisClient} = require('./middleware/app.middleware');
-const {cleanupService} = require('./controllers/cache.controller');
-const Y = require('yjs');
-const { setupWSConnection, setPersistence } = require('@y/websocket-server/utils');
+const encodingModule = await import('lib0/encoding');
+const encoding = encodingModule.default ?? encodingModule;
+const syncProtocolModule = await import('y-protocols/sync');
+const syncProtocol = syncProtocolModule.default ?? syncProtocolModule;
 
-// Import notification service from file middleware
-const { getFileNotificationService } = require('./middleware/file.middleware');
+const loggerModule = await import('./utils/app.logger.js');
+const logger = loggerModule.default ?? loggerModule.logger ?? loggerModule;
+
+const dbModule = await import('./config/db.js');
+const {connectDB} = dbModule;
+
+const errorHandlerModule = await import('./middleware/error.middleware.js');
+const errorHandler = errorHandlerModule.default ?? errorHandlerModule.errorHandler ?? errorHandlerModule;
+
+const appMiddleware = await import('./middleware/app.middleware.js');
+const appController = await import('./controllers/app.controller.js');
+
+const cacheMiddleware = await import('./middleware/cache.middleware.js');
+const {noCacheResponse} = cacheMiddleware;
+
+const cacheControllerModule = await import('./controllers/cache.controller.js');
+const {cleanupService} = cacheControllerModule;
+
+const fileMiddleware = await import('./middleware/file.middleware.js');
+const {getFileNotificationService, getYjsService} = fileMiddleware;
 const notificationService = getFileNotificationService();
+
+const {redisClient} = appMiddleware;
 
 /**
  * Server class that encapsulates the Express application
@@ -35,7 +52,6 @@ class Server {
      * Creates a new Server instance
      * @param {Object} options - Server configuration options
      * @param {string} options.envPath - Path to .env file
-     * @param {boolean} options.skipValidation - Skip environment validation (for tests)
      */
 
     constructor(options = {}) {
@@ -88,10 +104,7 @@ class Server {
             logger.debug('🔧 ENV DEBUG - NODE_ENV:', process.env.NODE_ENV);
         }
 
-        // Skip validation if we're in test mode and variables haven't been loaded yet
-        if (process.env.NODE_ENV !== 'test') {
-            this.validateEnvironment();
-        }
+        this.validateEnvironment();
     }
 
     /**
@@ -123,23 +136,15 @@ class Server {
         // Handle unhandled promise rejections
         process.on('unhandledRejection', (err, promise) => {
             logger.error('Unhandled Rejection:', {message: err.message, stack: err.stack, promise, error: err});
-
-            // In test mode, don't exit the process
-            if (process.env.NODE_ENV !== 'test') {
-                logger.info('Server shutting down due to unhandled rejection.');
-                this.shutdown(1);
-            }
+            logger.info('Server shutting down due to unhandled rejection.');
+            this.shutdown(1);
         });
 
         // Add event listener for uncaught exceptions
         process.on('uncaughtException', (err) => {
             logger.error('Uncaught Exception:', {message: err.message, stack: err.stack, error: err});
-
-            // In test mode, don't exit the process
-            if (process.env.NODE_ENV !== 'test') {
-                logger.info('Server shutting down due to uncaught exception.');
-                this.shutdown(1);
-            }
+            logger.info('Server shutting down due to uncaught exception.');
+            this.shutdown(1);
         });
 
         // Add SIGTERM handler for graceful shutdown with Docker/Kubernetes
@@ -164,21 +169,40 @@ class Server {
         // Setup basic health check route - unprotected and without API prefix
         // Health endpoints should NEVER use caching
         this.app.get('/health', noCacheResponse(), appController.getHealth);
-        // Import route modules
-        const authRouter = require('./routes/auth.routes');
-        const userRouter = require('./routes/user.routes');
-        const appRouter = require('./routes/app.routes');
-        const fileRouter = require('./routes/file.routes');
-        const cacheRouter = require('./routes/cache.routes');
+        // Import route modules (lazy load to avoid circular dependencies)
+        const [
+            authRoutesModule,
+            userRoutesModule,
+            appRoutesModule,
+            fileRoutesModule,
+            cacheRoutesModule
+        ] = await Promise.all([
+            import('./routes/auth.routes.js'),
+            import('./routes/user.routes.js'),
+            import('./routes/app.routes.js'),
+            import('./routes/file.routes.js'),
+            import('./routes/cache.routes.js')
+        ]);
 
-        // Register all routes for validation
+        const authRouter = authRoutesModule.default ?? authRoutesModule.router ?? authRoutesModule;
+        const userRouter = userRoutesModule.default ?? userRoutesModule.router ?? userRoutesModule;
+        const appRouter = appRoutesModule.default ?? appRoutesModule.router ?? appRoutesModule;
+        const fileRouter = fileRoutesModule.default ?? fileRoutesModule.router ?? fileRoutesModule;
+        const cacheRouter = cacheRoutesModule.default ?? cacheRoutesModule.router ?? cacheRoutesModule;
+
+        const authValidRoutes = authRoutesModule.validRoutes ?? authRouter.validRoutes ?? [];
+        const userValidRoutes = userRoutesModule.validRoutes ?? userRouter.validRoutes ?? [];
+        const appValidRoutes = appRoutesModule.validRoutes ?? appRouter.validRoutes ?? [];
+        const fileValidRoutes = fileRoutesModule.validRoutes ?? fileRouter.validRoutes ?? [];
+        const cacheValidRoutes = cacheRoutesModule.validRoutes ?? cacheRouter.validRoutes ?? [];
+
         appMiddleware.registerRoutes([
             '/health',
-            ...appRouter.validRoutes,
-            ...authRouter.validRoutes,
-            ...userRouter.validRoutes,
-            ...fileRouter.validRoutes,
-            ...cacheRouter.validRoutes
+            ...appValidRoutes,
+            ...authValidRoutes,
+            ...userValidRoutes,
+            ...fileValidRoutes,
+            ...cacheValidRoutes
         ]);
 
         // Apply route validation middleware specifically to /api routes
@@ -210,7 +234,6 @@ class Server {
             this.dbConnection = await connectDB();
             
             // Initialize Yjs service after database connection
-            const { getYjsService } = require('./middleware/file.middleware');
             const yjsService = getYjsService();
             await yjsService.initialize();
             
@@ -251,10 +274,10 @@ class Server {
      */  
     async initializeEmailService() {
         try {
-            const {initializeEmailService} = require('./controllers/app.controller');
+            const {initializeEmailService} = appController;
             logger.info('📧 Initializing email service...');
 
-            const transporter = await initializeEmailService();
+            const transporter = await initializeEmailService?.();
             if (transporter) {
                 logger.info('✅ Email service initialized successfully');
             } else {
@@ -272,8 +295,8 @@ class Server {
      */
     isEmailServiceReady() {
         try {
-            const {isEmailReady} = require('./controllers/app.controller');
-            return isEmailReady();
+            const {isEmailReady} = appController;
+            return isEmailReady?.();
         } catch (error) {
             return false;
         }
@@ -285,8 +308,8 @@ class Server {
      */
     getEmailService() {
         try {
-            const {getEmailTransporter} = require('./controllers/app.controller');
-            return getEmailTransporter();
+            const {getEmailTransporter} = appController;
+            return getEmailTransporter?.();
         } catch (error) {
             logger.error('Failed to get email service:', error);
             return null;
@@ -296,31 +319,6 @@ class Server {
     /**
      * Register process handlers for graceful shutdown
      */
-    registerProcessHandlers() {
-        // Handle uncaught exceptions
-        process.on('uncaughtException', (error) => {
-            logger.error('Uncaught Exception:', error);
-            this.shutdown(1);
-        });
-
-        // Handle unhandled promise rejections
-        process.on('unhandledRejection', (reason, promise) => {
-            logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-            this.shutdown(1);
-        });
-
-        // Handle graceful shutdown signals
-        process.on('SIGINT', () => {
-            logger.info('Received SIGINT (Ctrl+C), initiating graceful shutdown...');
-            this.shutdown(0);
-        });
-
-        process.on('SIGTERM', () => {
-            logger.info('Received SIGTERM, initiating graceful shutdown...');
-            this.shutdown(0);
-        });
-    }
-
     /**
      * Start the server
      * @param {number} port - Port to listen on (overrides environment variable)
@@ -364,17 +362,19 @@ class Server {
                     try {
                         logger.info('🚀 Setting up integrated Yjs WebSocket server');
                         
-                        const WebSocket = require('ws');
-                        const fileController = require('./controllers/file.controller');
-                        const { docs } = require('@y/websocket-server/utils');
-                        
+                        const fileControllerModule = await import('./controllers/file.controller.js');
+                        const authMiddleware = await import('./middleware/auth.middleware.js');
+                        const fileModelModule = await import('./models/file.model.js');
+                        const FileModel = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
+                        const yjsService = fileControllerModule.yjsService ?? fileControllerModule.getYjsService?.();
+
                         // Create WebSocket server using the existing HTTP server - standard Yjs pattern
                         // Handle both /yjs/ and /notifications paths appropriately
-                        const wss = new WebSocket.Server({ 
+                        const wss = new WebSocket.Server({
                             server: this.httpServer
                         });
 
-                        const persistence = fileController.yjsService.getPersistence();
+                        const persistence = yjsService?.getPersistence?.();
 
                         if (persistence) {
                             setPersistence({
@@ -457,8 +457,7 @@ class Server {
                                                                 '/' + docNameToUpdate; // Add leading slash if no prefix
                                                             
                                                             // Update the file metadata to reflect the content change
-                                                            const File = require('./models/file.model');
-                                                            await File.updateOne(
+                                                            await FileModel.updateOne(
                                                                 { filePath: filePath, type: 'text' },
                                                                 { updatedAt: new Date() }
                                                             );
@@ -488,7 +487,7 @@ class Server {
 
                                         // Bind Redis adapter for cross-server synchronization
                                         try {
-                                            const redisAdapter = await fileController.yjsService.bindRedisAdapter(docName, ydoc);
+                                            const redisAdapter = await yjsService?.bindRedisAdapter?.(docName, ydoc);
                                             if (redisAdapter) {
                                                 logger.debug('Redis adapter bound for cross-server sync', { docName });
                                             }
@@ -514,7 +513,7 @@ class Server {
                                         
                                         // Unbind Redis adapter when document is being written/closed
                                         try {
-                                            await fileController.yjsService.unbindRedisAdapter(docName, ydoc);
+                                            await yjsService?.unbindRedisAdapter?.(docName, ydoc);
                                         } catch (redisError) {
                                             logger.warn('Failed to unbind Redis adapter during writeState', {
                                                 docName,
@@ -530,7 +529,7 @@ class Server {
                                 }
                             });
 
-                            const redisStats = fileController.yjsService.getRedisStats();
+                            const redisStats = yjsService?.getRedisStats?.() ?? {isEnabled: false, isConnected: false};
                             if (redisStats.isEnabled && redisStats.isConnected) {
                                 logger.info('Yjs WebSocket persistence bound to MongoDB with Redis pub/sub scaling (multi-server mode)');
                             } else {
@@ -564,8 +563,7 @@ class Server {
                                 }
 
                                 // Authenticate WebSocket connection
-                                const authMiddleware = require('./middleware/auth.middleware');
-                                const user = await authMiddleware.authenticateWebSocket(ws, req);
+                                const user = await authMiddleware.authenticateWebSocket?.(ws, req);
 
                                 // Extract document name from URL
                                 const docNameFromUrl = req.url.slice(1).split('?')[0];
@@ -584,10 +582,6 @@ class Server {
                                 try {
                                     const doc = docs.get(docNameFromUrl);
                                     if (doc && ws.readyState === WebSocket.OPEN) {
-                                        const encoding = require('lib0/encoding');
-                                        const syncProtocol = require('y-protocols/sync');
-                                        
-                                        // Create sync step 2 message with full document state
                                         const encoder = encoding.createEncoder();
                                         encoding.writeVarUint(encoder, 0); // messageSync
                                         const update = Y.encodeStateAsUpdate(doc);
@@ -698,8 +692,8 @@ class Server {
 
                     // Cleanup Yjs service
                     try {
-                        const fileController = require('./controllers/file.controller');
-                        await fileController.yjsService.destroy();
+                        const fileControllerModule = await import('./controllers/file.controller.js');
+                        await fileControllerModule.yjsService?.destroy?.();
                         logger.info('Yjs service cleaned up');
                     } catch (error) {
                         logger.warn('Failed to cleanup Yjs service:', error.message);
@@ -757,18 +751,10 @@ class Server {
     async shutdown(exitCode = 0) {
         try {
             await this.stop();
-
-            // Don't exit in test mode
-            if (process.env.NODE_ENV !== 'test') {
-                process.exit(exitCode);
-            }
+            process.exit(exitCode);
         } catch (error) {
             logger.error('Error during shutdown:', error);
-
-            // Force exit in non-test mode
-            if (process.env.NODE_ENV !== 'test') {
-                process.exit(1);
-            }
+            process.exit(1);
         }
     }
 
@@ -800,20 +786,16 @@ class Server {
 // Create singleton instance
 const serverInstance = new Server();
 
-// Export both the class and a singleton instance
-module.exports = {
-    Server,
-    serverInstance,
+export const start = (port) => serverInstance.start(port);
+export const stop = () => serverInstance.stop();
+export const getApp = () => serverInstance.getApp();
+export const getServer = () => serverInstance.getServer();
+export const getConfig = () => serverInstance.getConfig();
+export const isRedisConnected = () => serverInstance.isRedisConnected();
+export const getRedisClient = () => serverInstance.getRedisClient();
+export const getDbConnection = () => serverInstance.getDbConnection();
+export const isEmailReady = () => appMiddleware.isEmailReady?.();
+export const getEmailTransporter = () => appMiddleware.getEmailTransporter?.();
 
-    // Export convenience methods on the module itself
-    start: (port) => serverInstance.start(port),
-    stop: () => serverInstance.stop(),
-    getApp: () => serverInstance.getApp(),
-    getServer: () => serverInstance.getServer(),
-    getConfig: () => serverInstance.getConfig(), 
-    isRedisConnected: () => serverInstance.isRedisConnected(),
-    getRedisClient: () => serverInstance.getRedisClient(),
-    getDbConnection: () => serverInstance.getDbConnection(),
-    isEmailReady: () => appMiddleware.isEmailReady(),
-    getEmailTransporter: () => appMiddleware.getEmailTransporter()
-};
+export {Server, serverInstance};
+export default serverInstance;

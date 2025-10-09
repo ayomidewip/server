@@ -1,5 +1,5 @@
-const Joi = require('joi');
-const {ObjectId} = require('mongodb');
+import JoiBase from 'joi';
+import {ObjectId} from 'mongodb';
 
 const joiHelpers = {
     // Phone number validation
@@ -20,7 +20,7 @@ const joiHelpers = {
     }
 };
 
-const customJoi = Joi.extend((joi) => ({
+const customJoi = JoiBase.extend((joi) => ({
     type: 'objectId',
     base: joi.string(),
     messages: {
@@ -145,12 +145,10 @@ const customJoi = Joi.extend((joi) => ({
     }
 }));
 
-module.exports = {
-    objectId: customJoi.objectId,
-    password: () => customJoi.password().complexity(),
-    futureDate: customJoi.futureDate,
-    filePath: customJoi.filePath,
-    phoneNumber: customJoi.string().custom(joiHelpers.phoneNumber, 'phone number validation'),
-    positiveNumber: customJoi.number().custom(joiHelpers.positiveNumber, 'positive number validation'),
-    Joi: customJoi
-};
+export const objectId = customJoi.objectId;
+export const password = () => customJoi.password().complexity();
+export const futureDate = customJoi.futureDate;
+export const filePath = customJoi.filePath;
+export const phoneNumber = customJoi.string().custom(joiHelpers.phoneNumber, 'phone number validation');
+export const positiveNumber = customJoi.number().custom(joiHelpers.positiveNumber, 'positive number validation');
+export const Joi = customJoi;

@@ -1,10 +1,13 @@
-const router = require('express').Router();
-const fileController = require('../controllers/file.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const {validateRequest} = require('../middleware/validation.middleware');
-const {fileSchemas, fileParamSchemas} = require('../models/schemas');
-const {cacheResponse, clearCache, autoInvalidateCache} = require('../middleware/cache.middleware');
-const {RIGHTS} = require('../config/rights');
+import {Router} from 'express';
+import fileController from '../controllers/file.controller.js';
+import * as authMiddleware from '../middleware/auth.middleware.js';
+import {validateRequest} from '../middleware/validation.middleware.js';
+import {fileSchemas, fileParamSchemas} from '../models/schemas.js';
+import {cacheResponse, clearCache, autoInvalidateCache} from '../middleware/cache.middleware.js';
+import {RIGHTS} from '../config/rights.js';
+import {upload, handleFileErrors} from '../middleware/file.middleware.js';
+
+const router = Router();
 
 // Define file routes for validation (HTTP operations for content, metadata, versions, etc.)
 router.validRoutes = [
@@ -94,7 +97,7 @@ router.get('/demo', fileController.getDemoFiles);
  */
 router.post('/upload',
     authMiddleware.verifyToken(), // Explicit auth middleware before multer
-    require('../middleware/file.middleware').upload.any(20),
+    upload.any(20),
     autoInvalidateCache('file'),
     fileController.uploadFile
 );
@@ -335,6 +338,6 @@ router.delete('/:filePath',
 );
 
 // Add file handling error middleware (includes upload error handling)
-router.use(require('../middleware/file.middleware').handleFileErrors);
+router.use(handleFileErrors);
 
-module.exports = router;
+export default router;

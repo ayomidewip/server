@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const logger = require('../utils/app.logger');
+import mongoose from 'mongoose';
+import logger from '../utils/app.logger.js';
 
 // GridFS bucket instance
 let gridFSBucket = null;
@@ -79,7 +79,6 @@ if (!process.listenerCount('SIGINT')) {
     process.on('SIGINT', async () => {
         logger.info(`${logger.safeColor(logger.colors.yellow)}[Database]${logger.safeColor(logger.colors.reset)} SIGINT received: Closing MongoDB connection`);
         try {
-            const {closeDB} = require('./db');
             await closeDB();
         } catch (err) {
             logger.error('Error closing MongoDB connection:', err.message);
@@ -196,37 +195,46 @@ const retrieveFromGridFS = async (filePath, {asStream = false} = {}) => {
 
             downloadStream.on('error', reject);
 
-            downloadStream.on('end', () => {
-                const buffer = Buffer.concat(chunks);
+            downloadStream.on('end', async () => {
+                try {
+                    const buffer = Buffer.concat(chunks);
 
-                // For binary files, return buffer; for text files, convert to string
-                const mimeType = file.metadata?.mimeType || 'application/octet-stream';
-                const File = require('../models/file.model');
-                const isTextFile = File.isTextBasedFile(mimeType);
+                    // For binary files, return buffer; for text files, convert to string
+                    const mimeType = file.metadata?.mimeType || 'application/octet-stream';
+                    const fileModelModule = await import('../models/file.model.js');
+                    const FileModel = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
+                    const isTextFile = FileModel.isTextBasedFile(mimeType);
 
-                // Extract compression information from file metadata
-                const compression = file.metadata?.compression || {};
-                const isCompressed = compression.isCompressed === true;
-                const compressionAlgorithm = compression.algorithm;
+                    // Extract compression information from file metadata
+                    const compressionMeta = file.metadata?.compression || {};
+                    const isCompressedFile = compressionMeta.isCompressed === true;
+                    const compressionAlgorithm = compressionMeta.algorithm;
 
-                // Log the details to help with debugging
-                logger.debug(`GridFS file retrieval for ${filePath}:`, {
-                    isTextFile, mimeType, isCompressed, algorithm: compressionAlgorithm, bufferLength: buffer.length
-                });
+                    // Log the details to help with debugging
+                    logger.debug(`GridFS file retrieval for ${filePath}:`, {
+                        isTextFile,
+                        mimeType,
+                        isCompressed: isCompressedFile,
+                        algorithm: compressionAlgorithm,
+                        bufferLength: buffer.length
+                    });
 
-                // Always encode as base64 string regardless of file type or compression
-                const content = buffer.toString('base64');
+                    // Always encode as base64 string regardless of file type or compression
+                    const content = buffer.toString('base64');
 
-                // Return all necessary metadata for proper decompression
-                resolve({
-                    content, // Always base64 encoded
-                    metadata: file.metadata || {},
-                    size: file.length,
-                    uploadDate: file.uploadDate,
-                    isCompressed,
-                    compressionAlgorithm,
-                    compressionMetadata: compression
-                });
+                    // Return all necessary metadata for proper decompression
+                    resolve({
+                        content, // Always base64 encoded
+                        metadata: file.metadata || {},
+                        size: file.length,
+                        uploadDate: file.uploadDate,
+                        isCompressed: isCompressedFile,
+                        compressionAlgorithm,
+                        compressionMetadata: compressionMeta
+                    });
+                } catch (innerError) {
+                    reject(innerError);
+                }
             });
         });
     } catch (error) {
@@ -328,12 +336,12 @@ const closeDB = async () => {
     }
 };
 
-module.exports = {
-    connectDB: connectDB, 
-    closeDB, 
-    getGridFSBucket, 
-    storeInGridFS, 
-    retrieveFromGridFS, 
+export {
+    connectDB,
+    closeDB,
+    getGridFSBucket,
+    storeInGridFS,
+    retrieveFromGridFS,
     deleteFromGridFS,
     renameInGridFS
 };

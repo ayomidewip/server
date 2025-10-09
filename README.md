@@ -475,7 +475,7 @@ POST   /api/v1/email/test         # Send test email
 ```bash
 npm run dev        # Start development server with nodemon
 npm start          # Start production server
-npm test           # Run test suite with Jest
+npm test           # Run test suite with Vitest
 ```
 
 ### Project Structure

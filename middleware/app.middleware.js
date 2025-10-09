@@ -1,12 +1,22 @@
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const hpp = require('hpp');
-const cors = require('cors');
-const express = require('express');
-const cookieParser = require('cookie-parser');
-const logger = require('../utils/app.logger');
-const redis = require('redis');
-const Log = require('../models/log.model');
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import hpp from 'hpp';
+import cors from 'cors';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import logger from '../utils/app.logger.js';
+import redis from 'redis';
+import {sanitizeObject} from '../utils/sanitize.js';
+
+// Lazy-load Log model to prevent recompilation errors in Vitest
+let Log = null;
+async function getLogModel() {
+    if (!Log) {
+        const module = await import('../models/log.model.js');
+        Log = module.default;
+    }
+    return Log;
+}
 
 // Wrapper for async route handlers
 const asyncHandler = (fn) => (req, res, next) => {
@@ -163,7 +173,7 @@ const formatMethod = (method) => {
  * Custom HTTP request logging middleware - simplified
  */
 const createHttpLogger = () => {
-    return (req, res, next) => {
+    return async (req, res, next) => {
         const startHrTime = process.hrtime();
 
         // Capture request body for logging
@@ -180,7 +190,9 @@ const createHttpLogger = () => {
                 requestHeaders[header] = req.headers[header];
             }
         });
-        requestHeaders['x-operation-type'] = Log.determineOperationType(req.method);
+        // Use lazy-loaded Log model to determine operation type
+        const LogModel = await getLogModel();
+        requestHeaders['x-operation-type'] = LogModel.determineOperationType(req.method);
 
         // Override res.json to capture response data
         const originalJson = res.json;
@@ -251,7 +263,6 @@ const createHttpLogger = () => {
 
             // Handle cache invalidation
             try {
-                const { invalidateEntityCache } = require('./cache.middleware');
                 if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && res.statusCode >= 200 && res.statusCode < 300) {
                     let entityType = 'unknown';
                     let entityId = null;
@@ -270,10 +281,17 @@ const createHttpLogger = () => {
                     }
 
                     if (entityType !== 'unknown') {
-                        invalidateEntityCache(entityType, entityId, req.user ? req.user.id : null)
+                        import('./cache.middleware.js')
+                            .then(({invalidateEntityCache}) => {
+                                if (invalidateEntityCache) {
+                                    invalidateEntityCache(entityType, entityId, req.user ? req.user.id : null);
+                                }
+                            })
+                            .catch(() => {});
                     }
                 }
             } catch (error) {
+                // Swallow cache invalidation errors to avoid affecting response lifecycle
             }
 
             originalEnd.apply(this, args);
@@ -659,10 +677,7 @@ const handleUndefinedRoutes = (app) => {
     });
 };
 
-// Import sanitization utilities
-const {sanitizeObject} = require('../utils/sanitize');
-
-module.exports = {
+export {
     setupMiddleware,
     registerRoutes,
     validateRoute,

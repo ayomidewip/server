@@ -10,12 +10,12 @@
  */
 
 // Define roles
-const ROLES = {
+export const ROLES = {
     OWNER: 'OWNER', ADMIN: 'ADMIN', SUPER_CREATOR: 'SUPER_CREATOR', CREATOR: 'CREATOR', USER: 'USER'
 };
 
 // Define permissions
-const RIGHTS = {
+export const RIGHTS = {
     DELETE_USERS: 'DELETE_USERS',
     MANAGE_ALL_USERS: 'MANAGE_ALL_USERS',
     MANAGE_OWN_ACCOUNT: 'MANAGE_OWN_ACCOUNT',
@@ -27,7 +27,7 @@ const RIGHTS = {
 };
 
 // Role hierarchy for role-based checks
-const ROLE_HIERARCHY = {
+export const ROLE_HIERARCHY = {
     [ROLES.OWNER]: 5, [ROLES.ADMIN]: 4, [ROLES.SUPER_CREATOR]: 3, [ROLES.CREATOR]: 2, [ROLES.USER]: 1
 };
 
@@ -46,7 +46,7 @@ const RIGHT_ASSIGNMENT = {
  * @param {String} right - Required right
  * @returns {Boolean} - Whether the user has the right
  */
-const hasRight = (userRoles, right) => {
+export const hasRight = (userRoles, right) => {
     // Convert single role to array for consistency
     const roles = Array.isArray(userRoles) ? userRoles : [userRoles];
 
@@ -63,7 +63,7 @@ const hasRight = (userRoles, right) => {
  * @param {String} requiredRole - Minimum role required
  * @returns {Boolean} - Whether user has the required role level
  */
-const hasRole = (userRoles, requiredRole) => {
+export const hasRole = (userRoles, requiredRole) => {
     // Convert single role to array for consistency
     const roles = Array.isArray(userRoles) ? userRoles : [userRoles];
 
@@ -82,7 +82,7 @@ const hasRole = (userRoles, requiredRole) => {
  * @param {Array|String} userRoles - User's roles
  * @returns {Number} - Highest role level
  */
-const getHighestRoleLevel = (userRoles) => {
+export const getHighestRoleLevel = (userRoles) => {
     // Convert single role to array for consistency
     const roles = Array.isArray(userRoles) ? userRoles : [userRoles];
 
@@ -96,7 +96,7 @@ const getHighestRoleLevel = (userRoles) => {
  * @param {String} targetRole - Role to be assigned
  * @returns {Boolean} - Whether user can assign the target role
  */
-const canAssignRole = (userRoles, targetRole) => {
+export const canAssignRole = (userRoles, targetRole) => {
     const userLevel = getHighestRoleLevel(userRoles);
     const targetLevel = ROLE_HIERARCHY[targetRole] || 0;
 
@@ -109,7 +109,7 @@ const canAssignRole = (userRoles, targetRole) => {
  * @param {Array|String} roles - Roles to check
  * @returns {Boolean} - Whether any of the roles require owner approval
  */
-const requiresOwnerApproval = (roles) => {
+export const requiresOwnerApproval = (roles) => {
     const rolesArray = Array.isArray(roles) ? roles : [roles];
 
     // All roles except USER require owner approval
@@ -121,7 +121,7 @@ const requiresOwnerApproval = (roles) => {
  * @param {Array|String} roles - Roles to check
  * @returns {Array} - Array of elevated roles
  */
-const getElevatedRoles = (roles) => {
+export const getElevatedRoles = (roles) => {
     const rolesArray = Array.isArray(roles) ? roles : [roles];
 
     return rolesArray.filter(role => role !== ROLES.USER);
@@ -132,20 +132,8 @@ const getElevatedRoles = (roles) => {
  * @param {Array|String} userRoles - User's roles
  * @returns {Boolean} - Whether user has owner role
  */
-const isOwner = (userRoles) => {
+export const isOwner = (userRoles) => {
     const roles = Array.isArray(userRoles) ? userRoles : [userRoles];
     return roles.includes(ROLES.OWNER);
 };
 
-module.exports = {
-    ROLES,
-    RIGHTS,
-    ROLE_HIERARCHY,
-    hasRight,
-    hasRole,
-    getHighestRoleLevel,
-    canAssignRole,
-    requiresOwnerApproval,
-    getElevatedRoles,
-    isOwner
-};

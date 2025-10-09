@@ -1,10 +1,20 @@
-const router = require('express').Router();
-const authController = require('../controllers/auth.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const {validateRequest} = require('../middleware/validation.middleware');
-const {authSchemas, twoFactorSchemas, emailVerificationSchemas} = require('../models/schemas');
-const {ROLES, RIGHTS} = require('../config/rights');
-const {clearCache, cacheResponse, autoInvalidateCache} = require('../middleware/cache.middleware');
+import {Router} from 'express';
+import authController from '../controllers/auth.controller.js';
+import * as authMiddleware from '../middleware/auth.middleware.js';
+import {validateRequest} from '../middleware/validation.middleware.js';
+import {
+    authSchemas,
+    twoFactorSchemas,
+    emailVerificationSchemas
+} from '../models/schemas.js';
+import {ROLES, RIGHTS} from '../config/rights.js';
+import {
+    clearCache,
+    cacheResponse,
+    autoInvalidateCache
+} from '../middleware/cache.middleware.js';
+
+const router = Router();
 
 // Define auth routes for validation
 router.validRoutes = [
@@ -193,4 +203,4 @@ router.get('/roles/pending-requests',
     authController.getPendingRoleRequests
 );
 
-module.exports = router;
+export default router;

@@ -1,24 +1,32 @@
-const jwt = require('jsonwebtoken');
-const User = require('../models/user.model');
-const userMiddleware = require('../middleware/user.middleware');
-const {asyncHandler} = require('../middleware/app.middleware');
-const {AppError} = require('../middleware/error.middleware');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-const speakeasy = require('speakeasy');
-const QRCode = require('qrcode');
-const {requiresOwnerApproval} = require('../config/rights');
-const logger = require('../utils/app.logger');
-const {cache} = require('../middleware/cache.middleware');
-const {sanitizeObject} = require('../utils/sanitize');
-const {sendEmail, getEmailTransporter} = require('./app.controller');
+import jwt from 'jsonwebtoken';
+import User from '../models/user.model.js';
+import {
+    normalizeRoles,
+    processRolesWithApproval,
+    generateDeviceFingerprint,
+    addOrUpdateDevice,
+    getDeviceSummary
+} from '../middleware/user.middleware.js';
+import {asyncHandler} from '../middleware/app.middleware.js';
+import {AppError} from '../middleware/error.middleware.js';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import speakeasy from 'speakeasy';
+import QRCode from 'qrcode';
+import {requiresOwnerApproval} from '../config/rights.js';
+import logger from '../utils/app.logger.js';
+import {cache} from '../middleware/cache.middleware.js';
+import {sanitizeObject} from '../utils/sanitize.js';
+import {
+    sendEmail,
+    getEmailTransporter
+} from './app.controller.js';
 
 /**
  * Helper function to normalize user roles
  * @param {String|Array} roles - User roles
  * @returns {Array} - Normalized roles array
  */
-const normalizeRoles = userMiddleware.normalizeRoles;
 
 /**
  * Generate access and refresh tokens for a user
@@ -242,7 +250,7 @@ const sendSecurityAlertEmail = async (user, alertData, transporter = null) => {
  * Auth Controller
  * Handles authentication-related operations with Redis caching
  */
-module.exports = {
+const authController = {
     signup: asyncHandler(async (req, res, next) => {
         logger.info(`${logger.safeColor(logger.colors.cyan)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Signup request received...`, {ip: req.ip});
         logger.verbose('[Auth Controller - Signup] Request headers:', {headers: req.headers});
@@ -298,7 +306,7 @@ module.exports = {
             const hashedPassword = await bcrypt.hash(password, 12);
 
             // Process roles with approval logic
-            const roleProcessing = userMiddleware.processRolesWithApproval(
+            const roleProcessing = processRolesWithApproval(
                 roles,
                 req.user, // Current user if authenticated (for admin creation)
                 null // Target user (will be the new user)
@@ -335,9 +343,9 @@ module.exports = {
             logger.info(`${logger.safeColor(logger.colors.cyan)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Signup: User created successfully`, {
                 userId: user.id, username: user.username
             });            // Generate device fingerprint and add the initial device
-            const deviceInfo = userMiddleware.generateDeviceFingerprint(req);
+            const deviceInfo = generateDeviceFingerprint(req);
             try {
-                await userMiddleware.addOrUpdateDevice(user, deviceInfo);
+                await addOrUpdateDevice(user, deviceInfo);
                 logger.info(`[Auth Controller] Initial device registered for new user:`, {
                     userId: user.id,
                     deviceId: deviceInfo.deviceId,
@@ -507,7 +515,7 @@ module.exports = {
 
             // Track user device for login and send security alert for new devices
             try {
-                const deviceInfo = userMiddleware.generateDeviceFingerprint(req);
+                const deviceInfo = generateDeviceFingerprint(req);
                 logger.verbose('[Auth Controller - Login] Generated device fingerprint:', {deviceInfo});
 
                 // Check if this is a new device before adding it
@@ -547,7 +555,7 @@ module.exports = {
                     }
                 }
 
-                await userMiddleware.addOrUpdateDevice(user, deviceInfo);
+                await addOrUpdateDevice(user, deviceInfo);
                 logger.verbose('[Auth Controller - Login] Device tracking updated for user:', {
                     userId: user.id,
                     deviceId: deviceInfo.deviceId,
@@ -660,9 +668,9 @@ module.exports = {
 
             // Track user device for token refresh
             try {
-                const deviceInfo = userMiddleware.generateDeviceFingerprint(req);
+                const deviceInfo = generateDeviceFingerprint(req);
                 logger.verbose('[Auth Controller - Refresh Token] Generated device fingerprint:', {deviceInfo});
-                await userMiddleware.addOrUpdateDevice(user, deviceInfo);
+                await addOrUpdateDevice(user, deviceInfo);
                 logger.verbose('[Auth Controller - Refresh Token] Device tracking updated for user:', {
                     userId: user.id,
                     deviceId: deviceInfo.deviceId,
@@ -912,7 +920,7 @@ module.exports = {
                     success: false, message: 'User not found'
                 });
             }            // Get device summary using user middleware
-            const devices = userMiddleware.getDeviceSummary(user);
+            const devices = getDeviceSummary(user);
 
             logger.info(`[Auth Controller] Retrieved ${devices.length} devices for user`, {userId: req.user.id});
             res.status(200).json({
@@ -1625,7 +1633,22 @@ module.exports = {
             return next(new AppError('Failed to generate WebSocket token', 500));
         }
     })
-}
+};
+
+export {authController};
+export default authController;
+export {
+    sendPasswordResetEmail,
+    sendWelcomeEmail,
+    sendPasswordChangedEmail,
+    sendSecurityAlertEmail,
+    cacheUserProfile,
+    formatUserResponse,
+    generateTokens,
+    setTokenCookies,
+    clearTokenCookies,
+    verify2FAToken
+};
 
 // =============================================================================
 // HELPER FUNCTIONS

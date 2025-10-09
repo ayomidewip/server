@@ -3,21 +3,42 @@
  * Provides structured logging using Winston with beautiful console output
  */
 
-const winston = require('winston');
-const figlet = require('figlet');
+import winston from 'winston';
+import figlet from 'figlet';
+
 const {format, transports, createLogger} = winston;
 
 // Import Log model for database storage
 let Log = null;
+let logModelPromise = null;
+
+const loadLogModel = async () => {
+    if (!logModelPromise) {
+        logModelPromise = import('../models/log.model.js')
+            .then((module) => {
+                const model = module.default ?? module.Log ?? module;
+                Log = model;
+                return model;
+            })
+            .catch((error) => {
+                console.warn('Log model not available, database logging disabled:', error.message);
+                return null;
+            });
+    }
+    return logModelPromise;
+};
+
 // Function to safely get Log model and handle circular dependencies
 const getLogModel = () => {
-    if (!Log) {
-        try {
-            Log = require('../models/log.model');
-        } catch (error) {
-            console.warn('Log model not available, database logging disabled:', error.message);
-        }
+    if (Log) {
+        return Log;
     }
+
+    // Trigger async load but return current value (may be null during first invocation)
+    loadLogModel().catch(() => {
+        // Error already logged in loadLogModel
+    });
+
     return Log;
 };
 
@@ -790,4 +811,4 @@ appLogger.icons = icons;
 appLogger.safeColor = safeColor;
 appLogger.getRandomStartupMessage = getRandomStartupMessage;
 
-module.exports = appLogger;
+export default appLogger;

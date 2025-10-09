@@ -1,8 +1,10 @@
-const router = require('express').Router();
-const cacheController = require('../controllers/cache.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const {RIGHTS} = require('../config/rights');
-const {cacheResponse, noCacheResponse} = require('../middleware/cache.middleware');
+import {Router} from 'express';
+import * as cacheController from '../controllers/cache.controller.js';
+import * as authMiddleware from '../middleware/auth.middleware.js';
+import {RIGHTS} from '../config/rights.js';
+import {cacheResponse, noCacheResponse} from '../middleware/cache.middleware.js';
+
+const router = Router();
 
 // Define cache routes for validation
 router.validRoutes = [
@@ -51,4 +53,4 @@ router.get('/health',
     cacheController.getCacheHealth
 );
 
-module.exports = router;
+export default router;

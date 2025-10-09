@@ -1,14 +1,14 @@
-const logger = require('../utils/app.logger');
-const Log = require('../models/log.model');
-const mongoose = require('mongoose');
-const {cache} = require('../middleware/cache.middleware');
-const handlebars = require('handlebars');
-const nodemailer = require('nodemailer');
-const fs = require('fs').promises;
-const path = require('path');
-const {AppError} = require('../middleware/error.middleware');
-const {asyncHandler} = require('../middleware/app.middleware');
-const {GridFSBucket} = require('mongodb');
+import logger from '../utils/app.logger.js';
+import Log from '../models/log.model.js';
+import mongoose from 'mongoose';
+import {cache} from '../middleware/cache.middleware.js';
+import handlebars from 'handlebars';
+import nodemailer from 'nodemailer';
+import {promises as fs} from 'node:fs';
+import path from 'node:path';
+import {AppError} from '../middleware/error.middleware.js';
+import {asyncHandler, redisClient as sharedRedisClient} from '../middleware/app.middleware.js';
+import {GridFSBucket} from 'mongodb';
 
 /**
  * Email templates cache
@@ -60,7 +60,8 @@ const getHealthStatus = async () => {
     // Check Yjs Redis pub/sub health
     let yjsRedisHealth = { status: 'not_available' };
     try {
-        const fileController = require('./file.controller');
+    const fileControllerModule = await import('./file.controller.js');
+    const fileController = fileControllerModule.default ?? fileControllerModule;
         if (fileController.yjsService && fileController.yjsService.isInitialized) {
             yjsRedisHealth = await fileController.yjsService.redisHealthCheck();
         }
@@ -203,7 +204,7 @@ const setupHealthRoutes = async (app) => {    // Keep emojis for startup logs as
 const getCacheStats = asyncHandler(async (req, res, next) => {
     try {
         // Get Redis server info through appMiddleware
-        const redisClient = require('../middleware/app.middleware').redisClient;
+    const redisClient = sharedRedisClient;
 
         if (!redisClient || !redisClient.isReady) {
             return res.status(503).json({
@@ -1713,7 +1714,8 @@ const getGridFSStorageStats = async () => {
         if (collectionNames.includes('files')) {
             logger.info('Found regular files collection, counting documents...');
             try {
-                const File = require('../models/file.model');
+                const fileModelModule = await import('../models/file.model.js');
+                const File = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
 
                 // Get detailed breakdown of regular files
                 const regularFiles = await File.aggregate([
@@ -2341,8 +2343,10 @@ const getFilterSummary = (filters, options) => {
  */
 const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
     try {
-        const User = require('../models/user.model');
-        const File = require('../models/file.model');
+    const userModelModule = await import('../models/user.model.js');
+    const fileModelModule = await import('../models/file.model.js');
+    const User = userModelModule.default ?? userModelModule.User ?? userModelModule;
+    const File = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
 
         // Initialize stats object
         const stats = {
@@ -2427,7 +2431,7 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
         let cacheKeyCount = 0;
 
         try {
-            const redisClient = require('../middleware/app.middleware').redisClient;
+            const redisClient = sharedRedisClient;
 
             if (redisClient && redisClient.isReady) {
                 cacheStatus = 'connected';
@@ -2666,7 +2670,7 @@ const getApplicationPerformanceStats = asyncHandler(async (req, res, next) => {
     }
 });
 
-module.exports = {
+export {
     getHealth,
     getApiHealth,
     setupHealthRoutes,
@@ -2676,12 +2680,8 @@ module.exports = {
     getLogById,
     getLogStats,
     clearLogs,
-
-    // Application Statistics endpoints
     getApplicationOverviewStats,
     getApplicationPerformanceStats,
-
-    // Email functions
     loadTemplate,
     sendEmail,
     clearTemplateCache,
@@ -2690,12 +2690,8 @@ module.exports = {
     initializeEmailService,
     isEmailReady,
     getEmailTransporter,
-
-    // GridFS functions
     initializeGridFS,
     getGridFSStorageStats,
-
-    // Query filter functions
     parseFilters,
     applyFilters,
     applySmartPagination,
@@ -2706,6 +2702,7 @@ module.exports = {
 /**
  * Export GridFS utility functions for use in other parts of the app
  */
-module.exports.gridFSUtils = {
-    initializeGridFS, getGridFSStorageStats
+export const gridFSUtils = {
+    initializeGridFS,
+    getGridFSStorageStats
 };

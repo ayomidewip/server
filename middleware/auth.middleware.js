@@ -1,17 +1,18 @@
-const jwt = require('jsonwebtoken');
-const {hasRight, hasRole, ROLES, RIGHTS} = require('../config/rights');
-const userMiddleware = require('./user.middleware');
-const {cache} = require('./cache.middleware');
-const logger = require('../utils/app.logger'); // Added logger
-const User = require('../models/user.model'); // Added User model for active status check
+import jwt from 'jsonwebtoken';
+import {hasRight, hasRole, ROLES, RIGHTS} from '../config/rights.js';
+import {normalizeRoles} from './user.middleware.js';
+import {cache} from './cache.middleware.js';
+import logger from '../utils/app.logger.js'; // Added logger
+import User from '../models/user.model.js'; // Added User model for active status check
+import cookie from 'cookie';
+import cookieParserLib from 'cookie-parser';
+import {parse as parseUrl} from 'node:url';
 
 /**
  * Helper function to normalize user roles
  * @param {String|Array} roles - User roles
  * @returns {Array} - Normalized roles array
  */
-const normalizeRoles = userMiddleware.normalizeRoles;
-
 /**
  * Middleware to verify JWT tokens
  * @param {string} tokenType - Type of token (access or refresh)
@@ -325,15 +326,11 @@ const optionalAuth = (options = {}) => {
  * @returns {Promise<Object>} - Authenticated user object
  */
 const authenticateWebSocket = async (ws, req) => {
-    const cookie = require('cookie');
-    const cookieParser = require('cookie-parser');
-    const url = require('url');
-    
     try {
         // Parse cookies and attach to fake req object to reuse existing middleware
         if (req.headers.cookie) {
             const rawCookies = cookie.parse(req.headers.cookie);
-            const jsonCookies = cookieParser.JSONCookies(rawCookies);
+            const jsonCookies = cookieParserLib.JSONCookies(rawCookies);
             req.cookies = { ...rawCookies, ...jsonCookies };
         } else {
             req.cookies = {};
@@ -341,7 +338,7 @@ const authenticateWebSocket = async (ws, req) => {
         
         // TEMPORARY: Support URL token for existing connections (will be removed)
         // Parse URL parameters as fallback for backwards compatibility
-        const parsedUrl = url.parse(req.url, true);
+        const parsedUrl = parseUrl(req.url, true);
         const urlToken = parsedUrl.query.token;
         
         // If no cookies but URL token exists, temporarily set it as cookie for validation
@@ -403,13 +400,12 @@ const authenticateWebSocket = async (ws, req) => {
     }
 };
 
-module.exports = {
+export {
     verifyToken,
     checkRole,
     checkPermission,
     optionalAuth,
-    authenticateWebSocket, // Add WebSocket auth function
-    // Export constants for convenience
+    authenticateWebSocket,
     ROLES,
     RIGHTS
 };

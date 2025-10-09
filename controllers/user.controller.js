@@ -1,13 +1,24 @@
-const User = require('../models/user.model');
-const {asyncHandler} = require('../middleware/app.middleware');
-const {AppError} = require('../middleware/error.middleware');
-const bcrypt = require('bcryptjs');
-const {hasRight, RIGHTS, ROLES} = require('../config/rights');
-const {normalizeRoles} = require('../middleware/user.middleware');
-const {cache} = require('../middleware/cache.middleware');
-const logger = require('../utils/app.logger');
-const {sanitizeObject, sanitizeHtmlInObject} = require('../utils/sanitize'); // Import sanitize functions
-const {parseFilters, getFilterSummary} = require('./app.controller');
+import User from '../models/user.model.js';
+import File from '../models/file.model.js';
+import Log from '../models/log.model.js';
+import mongoose from 'mongoose';
+import {asyncHandler} from '../middleware/app.middleware.js';
+import {AppError} from '../middleware/error.middleware.js';
+import bcrypt from 'bcryptjs';
+import {hasRight, RIGHTS, ROLES} from '../config/rights.js';
+import {
+    normalizeRoles,
+    processRolesWithApproval
+} from '../middleware/user.middleware.js';
+import {cache} from '../middleware/cache.middleware.js';
+import logger from '../utils/app.logger.js';
+import {sanitizeObject, sanitizeHtmlInObject} from '../utils/sanitize.js';
+import {
+    parseFilters,
+    getFilterSummary,
+    applyFiltersToAggregation
+} from './app.controller.js';
+import {sendPasswordChangedEmail} from './auth.controller.js';
 
 // Helper function to format user response
 const formatUserResponse = (user) => {
@@ -32,7 +43,6 @@ const formatUserResponse = (user) => {
         updatedAt: user.updatedAt
     };
 };
-
 // Helper function to format public user response (limited info)
 const formatPublicUserResponse = (user) => {
     const roles = normalizeRoles(user.roles);
@@ -47,7 +57,7 @@ const formatPublicUserResponse = (user) => {
     };
 };
 
-module.exports = {
+const userController = {
     // Get public users (authenticated users only - limited info)
     getPublicUsers: asyncHandler(async (req, res, next) => {
         try {
@@ -232,9 +242,6 @@ module.exports = {
             // Log sanitized version for security (without actual sensitive data)
             const logSanitizedData = sanitizeObject(req.body);
 
-            // Import processRolesWithApproval function
-            const {processRolesWithApproval} = require('../middleware/user.middleware');
-            
             // Process roles with approval workflow if needed
             let finalRoles = roles || [ROLES.USER];
             let roleApprovalData = null;
@@ -712,7 +719,6 @@ module.exports = {
         // Send notification email for admin password resets
         if (!isOwnPassword && isAdmin) {
             try {
-                const {sendPasswordChangedEmail} = require('./auth.controller');
                 await sendPasswordChangedEmail(user);
                 logger.info(`Password change notification email sent for user: ${req.params.id}`);
             } catch (emailError) {
@@ -752,11 +758,6 @@ module.exports = {
                     message: 'Access denied. You can only view your own files unless you have admin privileges.'
                 });
             }
-
-            // Import File model here to avoid circular dependency
-            const File = require('../models/file.model');
-            const mongoose = require('mongoose');
-            const {applyFiltersToAggregation} = require('./app.controller');
 
             // Parse filters and options using the universal filter system
             const {filters, options} = parseFilters(req.query);
@@ -871,8 +872,6 @@ module.exports = {
     getUserStats: asyncHandler(async (req, res, next) => {
         try {
             const userId = req.params.id;
-            const Log = require('../models/log.model');
-            const mongoose = require('mongoose');
 
             // Check if the requesting user has admin rights or is the user themselves
             const isAdmin = hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS);
@@ -935,7 +934,6 @@ module.exports = {
                 // Get file statistics (if File model exists)
                 let fileStats = {};
                 try {
-                    const File = require('../models/file.model');
                     const userObjectId = new mongoose.Types.ObjectId(userId);
 
                     // Count total files by user - use ObjectId for consistency
@@ -1002,7 +1000,6 @@ module.exports = {
 
                 // Only include basic file stats
                 try {
-                    const File = require('../models/file.model');
                     const userObjectId = new mongoose.Types.ObjectId(userId);
                     stats.files = {
                         totalFiles: await File.countDocuments({
@@ -1044,8 +1041,6 @@ module.exports = {
         try {
             const userId = req.params.id;
             const requestedFields = req.query.fields ? req.query.fields.split(',') : [];
-            const Log = require('../models/log.model');
-            const mongoose = require('mongoose');
 
             // Check permissions
             const isAdmin = hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS);
@@ -1178,7 +1173,6 @@ module.exports = {
                         const fileField = field.replace('files.', '');
 
                         try {
-                            const File = require('../models/file.model');
                             const userObjectId = new mongoose.Types.ObjectId(userId);
 
                             // For non-admin/non-self, only show public files
@@ -1285,8 +1279,6 @@ module.exports = {
      */
     getUsersOverviewStats: asyncHandler(async (req, res, next) => {
         try {
-            const mongoose = require('mongoose');
-            const Log = require('../models/log.model');
 
             // Initialize stats object
             const stats = {
@@ -1497,3 +1489,6 @@ module.exports = {
 
 
 };
+
+export {userController, formatUserResponse, formatPublicUserResponse};
+export default userController;

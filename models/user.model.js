@@ -1,8 +1,8 @@
 // models/User.js
-const mongoose = require('mongoose');
-const validator = require('validator');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+import mongoose from 'mongoose';
+import validator from 'validator';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 
 const userSchema = new mongoose.Schema({
     firstName: {
@@ -156,6 +156,7 @@ userSchema.methods.createEmailVerificationToken = function () {
     return verificationToken;
 };
 
-const User = mongoose.model('User', userSchema);
+// Check if model exists to prevent recompilation errors in tests
+const User = mongoose.models.User || mongoose.model('User', userSchema);
 
-module.exports = User;
+export default User;

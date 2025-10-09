@@ -1,25 +1,25 @@
-const mongoose = require('mongoose');
-const User = require('../models/user.model');
-const {AppError} = require('./error.middleware');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-const {asyncHandler} = require('./app.middleware');
-const {
+import User from '../models/user.model.js';
+import {AppError} from './error.middleware.js';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import {asyncHandler} from './app.middleware.js';
+import {
     hasRight,
     RIGHTS,
     ROLES,
     canAssignRole,
     getElevatedRoles,
     isOwner
-} = require('../config/rights');
-const logger = require('../utils/app.logger'); // Added logger
+} from '../config/rights.js';
+import logger from '../utils/app.logger.js'; // Added logger
+import {cache} from './cache.middleware.js';
 
 /**
  * Helper function to normalize user roles
  * @param {String|Array} roles - User roles
  * @returns {Array} - Normalized roles array
  */
-const normalizeRoles = (roles) => {
+export const normalizeRoles = (roles) => {
     // If roles is null, undefined, or empty, return default role
     if (!roles || (Array.isArray(roles) && roles.length === 0)) {
         return [ROLES.USER]; // Default role
@@ -49,7 +49,7 @@ const normalizeRoles = (roles) => {
  * @param {Object} targetUser - User receiving the roles (for approval tracking)
  * @returns {Object} - Object containing assignedRoles, pendingRoles, and approval status
  */
-const processRolesWithApproval = (requestedRoles, currentUser = null, targetUser = null) => {
+export const processRolesWithApproval = (requestedRoles, currentUser = null, targetUser = null) => {
     const normalizedRoles = normalizeRoles(requestedRoles);
     const elevatedRoles = getElevatedRoles(normalizedRoles);
 
@@ -102,7 +102,7 @@ const processRolesWithApproval = (requestedRoles, currentUser = null, targetUser
 /**
  * Middleware to check if a user exists
  */
-exports.checkUserExists = asyncHandler(async (req, res, next) => {
+export const checkUserExists = asyncHandler(async (req, res, next) => {
     if (!req.params.id) {
         logger.warn(`${logger.safeColor(logger.colors.yellow)}[User Middleware]${logger.safeColor(logger.colors.reset)} User ID is required for checkUserExists middleware`, {originalUrl: req.originalUrl});
         return next(new AppError('User ID is required', 400));
@@ -139,7 +139,7 @@ exports.checkUserExists = asyncHandler(async (req, res, next) => {
 /**
  * Middleware to check if user has the right to access/modify this resource
  */
-exports.checkResourceOwnership = asyncHandler(async (req, res, next) => {
+export const checkResourceOwnership = asyncHandler(async (req, res, next) => {
     logger.info(`${logger.safeColor(logger.colors.cyan)}[User Middleware]${logger.safeColor(logger.colors.reset)} Checking resource ownership: ${req.params.id}, requestor: ${req.user.id}`);
     if (hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS)) {
         logger.info(`${logger.safeColor(logger.colors.cyan)}[User Middleware]${logger.safeColor(logger.colors.reset)} Overriding Resource ownership for Admin User: ${req.params.id}`);
@@ -160,7 +160,7 @@ exports.checkResourceOwnership = asyncHandler(async (req, res, next) => {
  * Only OWNER (with DELETE_USERS permission) can delete other users
  * Any user can delete their own account
  */
-exports.checkDeletePermission = asyncHandler(async (req, res, next) => {
+export const checkDeletePermission = asyncHandler(async (req, res, next) => {
     logger.info(`${logger.safeColor(logger.colors.cyan)}[User Middleware]${logger.safeColor(logger.colors.reset)} Checking delete permission: ${req.params.id}, requester: ${req.user.id}`);
 
     // Users can delete their own account
@@ -185,7 +185,7 @@ exports.checkDeletePermission = asyncHandler(async (req, res, next) => {
 /**
  * Middleware to check for duplicate username or email
  */
-exports.checkDuplicateUsernameOrEmail = asyncHandler(async (req, res, next) => {
+export const checkDuplicateUsernameOrEmail = asyncHandler(async (req, res, next) => {
     const {username, email} = req.body;
     const currentUserId = req.params.id; // User ID being updated (if any)
 
@@ -229,7 +229,7 @@ exports.checkDuplicateUsernameOrEmail = asyncHandler(async (req, res, next) => {
 /**
  * Middleware to validate roles and enforce role hierarchy
  */
-exports.checkRoles = () => {
+export const checkRoles = () => {
     return (req, res, next) => {
         const {roles} = req.body;
 
@@ -307,7 +307,7 @@ exports.checkRoles = () => {
 /**
  * Middleware to hash password
  */
-exports.hashPassword = asyncHandler(async (req, res, next) => {
+export const hashPassword = asyncHandler(async (req, res, next) => {
     logger.info(`${logger.safeColor(logger.colors.cyan)}[User Middleware]${logger.safeColor(logger.colors.reset)} Hashing Password`);
 
     // Hash newPassword for password change operations
@@ -328,7 +328,7 @@ exports.hashPassword = asyncHandler(async (req, res, next) => {
  * Middleware to normalize role field to roles array
  * Converts singular 'role' field to 'roles' array for consistency
  */
-exports.normalizeRoleField = (req, res, next) => {
+export const normalizeRoleField = (req, res, next) => {
     // If 'role' is provided but not 'roles', convert it
     if (req.body.role && !req.body.roles) {
         req.body.roles = Array.isArray(req.body.role) ? req.body.role : [req.body.role];
@@ -338,19 +338,11 @@ exports.normalizeRoleField = (req, res, next) => {
     next();
 };
 
-// Export the normalizeRoles function for use in other modules
-exports.normalizeRoles = normalizeRoles;
-
-/**
- * Process roles with approval logic
- */
-exports.processRolesWithApproval = processRolesWithApproval;
-
 /**
  * Middleware to check if user can assign roles during user creation
  * Only owners can assign roles above USER
  */
-exports.checkRoleAssignmentPermission = asyncHandler(async (req, res, next) => {
+export const checkRoleAssignmentPermission = asyncHandler(async (req, res, next) => {
     const {roles} = req.body;
 
     // If no roles specified or only USER role, allow
@@ -404,16 +396,16 @@ exports.checkRoleAssignmentPermission = asyncHandler(async (req, res, next) => {
  * @param {Object} req - Express request object
  * @returns {Object} Device information
  */
-exports.generateDeviceFingerprint = (req) => {
+export const generateDeviceFingerprint = (req) => {
     try {
         const userAgent = req.headers['user-agent'] || '';
         const acceptLanguage = req.headers['accept-language'] || '';
         const acceptEncoding = req.headers['accept-encoding'] || '';
         const xForwardedFor = req.headers['x-forwarded-for'] || '';
-        const ipAddress = exports.getClientIP(req);
+    const ipAddress = getClientIP(req);
 
-        // Parse user agent for more detailed info
-        const deviceInfo = exports.parseUserAgent(userAgent);
+    // Parse user agent for more detailed info
+    const deviceInfo = parseUserAgent(userAgent);
 
         // Create a unique fingerprint based on multiple factors
         const fingerprintData = {
@@ -451,13 +443,13 @@ exports.generateDeviceFingerprint = (req) => {
 
         // Return a basic fingerprint in case of error
         return {
-            deviceId: exports.generateFallbackDeviceId(req),
-            deviceFingerprint: exports.generateFallbackFingerprint(req),
+            deviceId: generateFallbackDeviceId(req),
+            deviceFingerprint: generateFallbackFingerprint(req),
             userAgent: req.headers['user-agent'] || 'Unknown',
             browser: 'Unknown',
             os: 'Unknown',
             platform: 'Unknown',
-            ipAddress: exports.getClientIP(req)
+            ipAddress: getClientIP(req)
         };
     }
 };
@@ -467,7 +459,7 @@ exports.generateDeviceFingerprint = (req) => {
  * @param {string} userAgent - User agent string
  * @returns {Object} Parsed device information
  */
-exports.parseUserAgent = (userAgent) => {
+export const parseUserAgent = (userAgent) => {
     if (!userAgent) {
         return {
             browser: 'Unknown', os: 'Unknown', platform: 'Unknown'
@@ -543,7 +535,7 @@ exports.parseUserAgent = (userAgent) => {
  * @param {Object} req - Express request object
  * @returns {string} Client IP address
  */
-exports.getClientIP = (req) => {
+export const getClientIP = (req) => {
     const forwarded = req.headers['x-forwarded-for'];
     if (forwarded) {
         return forwarded.split(',')[0].trim();
@@ -557,7 +549,7 @@ exports.getClientIP = (req) => {
  * @param {string} deviceFingerprint - Device fingerprint to check
  * @returns {Object} Recognition result
  */
-exports.isDeviceRecognized = (user, deviceFingerprint) => {
+export const isDeviceRecognized = (user, deviceFingerprint) => {
     if (!user.knownDevices || !Array.isArray(user.knownDevices)) {
         return {
             isRecognized: false, device: null, isNewDevice: true
@@ -577,7 +569,7 @@ exports.isDeviceRecognized = (user, deviceFingerprint) => {
  * @param {Object} deviceInfo - Device information
  * @returns {Object} Updated user object
  */
-exports.addOrUpdateDevice = async (user, deviceInfo) => {
+export const addOrUpdateDevice = async (user, deviceInfo) => {
     const maxRetries = 3;
     let attempts = 0;
 
@@ -638,7 +630,6 @@ exports.addOrUpdateDevice = async (user, deviceInfo) => {
             await currentUser.save();
 
             // Invalidate user caches after device update
-            const {cache} = require('./cache.middleware');
             await cache.invalidateUserCaches(currentUser.id);
 
             return currentUser;
@@ -684,9 +675,9 @@ exports.addOrUpdateDevice = async (user, deviceInfo) => {
  * @param {Object} req - Express request object
  * @returns {string} Fallback device ID
  */
-exports.generateFallbackDeviceId = (req) => {
+export const generateFallbackDeviceId = (req) => {
     const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip = exports.getClientIP(req);
+    const ip = getClientIP(req);
     const timestamp = Date.now();
 
     return crypto
@@ -701,9 +692,9 @@ exports.generateFallbackDeviceId = (req) => {
  * @param {Object} req - Express request object
  * @returns {string} Fallback fingerprint
  */
-exports.generateFallbackFingerprint = (req) => {
+export const generateFallbackFingerprint = (req) => {
     const userAgent = req.headers['user-agent'] || 'unknown';
-    const ip = exports.getClientIP(req);
+    const ip = getClientIP(req);
 
     return crypto
         .createHash('sha256')
@@ -718,7 +709,7 @@ exports.generateFallbackFingerprint = (req) => {
  * @param {number} inactiveDays - Days after which to consider device inactive
  * @returns {Object} Updated user object
  */
-exports.removeInactiveDevices = async (user, inactiveDays = 90) => {
+export const removeInactiveDevices = async (user, inactiveDays = 90) => {
     try {
         if (!user.knownDevices || !Array.isArray(user.knownDevices)) {
             return user;
@@ -735,7 +726,6 @@ exports.removeInactiveDevices = async (user, inactiveDays = 90) => {
             await user.save();
 
             // Invalidate user caches after device cleanup
-            const {cache} = require('./cache.middleware');
             await cache.invalidateUserCaches(user.id);
 
             logger.info('[User Middleware - Device] Removed inactive devices:', {
@@ -757,7 +747,7 @@ exports.removeInactiveDevices = async (user, inactiveDays = 90) => {
  * @param {Object} user - User object
  * @returns {Array} Array of device summaries
  */
-exports.getDeviceSummary = (user) => {
+export const getDeviceSummary = (user) => {
     if (!user.knownDevices || !Array.isArray(user.knownDevices)) {
         return [];
     }
@@ -786,7 +776,7 @@ exports.getDeviceSummary = (user) => {
  * @param {String} period - Period string like 30d, 12h, 2w, 6m, 1y
  * @returns {Object} - Start date for the period
  */
-exports.parseTimePeriod = (period) => {
+export const parseTimePeriod = (period) => {
     if (!period) return {startDate: null};
 
     const now = new Date();
@@ -822,9 +812,7 @@ exports.parseTimePeriod = (period) => {
  * Prepare user statistics filters
  * Converts query parameters to MongoDB query filters
  */
-exports.prepareUserStatsFilters = asyncHandler(async (req, res, next) => {
-    const Log = require('../models/log.model');
-    const mongoose = require('mongoose');
+export const prepareUserStatsFilters = asyncHandler(async (req, res, next) => {
 
     try {
         // Initialize filters object
@@ -847,7 +835,7 @@ exports.prepareUserStatsFilters = asyncHandler(async (req, res, next) => {
         }
 
         if (req.query.period) {
-            const {startDate} = exports.parseTimePeriod(req.query.period);
+            const {startDate} = parseTimePeriod(req.query.period);
             if (startDate) {
                 req.statsFilters.createdAt = {
                     ...req.statsFilters.createdAt,

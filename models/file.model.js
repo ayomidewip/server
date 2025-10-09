@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
-const mime = require('mime-types');
-const logger = require('../utils/app.logger');
-const {storeInGridFS, retrieveFromGridFS, deleteFromGridFS} = require('../config/db');
+import mongoose from 'mongoose';
+import mime from 'mime-types';
+import logger from '../utils/app.logger.js';
+import {storeInGridFS, retrieveFromGridFS, deleteFromGridFS} from '../config/db.js';
 
 /**
  * Hybrid File Schema for MongoDB storage
@@ -915,7 +915,7 @@ fileSchema.statics.isTextBasedFile = function(mimeType) {
     return textMimeTypes.some(type => mimeType.startsWith(type));
 };
 
-// Create the model
-const File = mongoose.model('File', fileSchema);
+// Check if model already exists to prevent recompilation errors
+const File = mongoose.models.File || mongoose.model('File', fileSchema);
 
-module.exports = File;
+export default File;

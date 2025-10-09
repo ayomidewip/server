@@ -1,11 +1,13 @@
-const router = require('express').Router();
-const userController = require('../controllers/user.controller');
-const userMiddleware = require('../middleware/user.middleware');
-const authMiddleware = require('../middleware/auth.middleware');
-const {validateRequest} = require('../middleware/validation.middleware');
-const {userSchemas, fileSchemas, statsSchemas} = require('../models/schemas');
-const {RIGHTS} = require('../config/rights');
-const {cacheResponse, clearCache, autoInvalidateCache} = require('../middleware/cache.middleware');
+import {Router} from 'express';
+import userController from '../controllers/user.controller.js';
+import * as userMiddleware from '../middleware/user.middleware.js';
+import * as authMiddleware from '../middleware/auth.middleware.js';
+import {validateRequest} from '../middleware/validation.middleware.js';
+import {userSchemas, fileSchemas, statsSchemas} from '../models/schemas.js';
+import {RIGHTS} from '../config/rights.js';
+import {cacheResponse, clearCache, autoInvalidateCache} from '../middleware/cache.middleware.js';
+
+const router = Router();
 
 // Define user routes for validation
 router.validRoutes = [
@@ -206,4 +208,4 @@ router.get('/:id/stats/fields',
     userController.getUserStatsFields
 );
 
-module.exports = router;
+export default router;

@@ -1,10 +1,12 @@
-const router = require('express').Router();
-const appController = require('../controllers/app.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const {RIGHTS} = require('../config/rights');
-const {cacheResponse, noCacheResponse} = require('../middleware/cache.middleware');
-const {validateRequest} = require('../middleware/validation.middleware');
-const {appStatsSchemas} = require('../models/schemas');
+import {Router} from 'express';
+import * as appController from '../controllers/app.controller.js';
+import * as authMiddleware from '../middleware/auth.middleware.js';
+import {RIGHTS} from '../config/rights.js';
+import {cacheResponse, noCacheResponse} from '../middleware/cache.middleware.js';
+import {validateRequest} from '../middleware/validation.middleware.js';
+import {appStatsSchemas} from '../models/schemas.js';
+
+const router = Router();
 
 // Define app routes for validation
 router.validRoutes = [
@@ -79,4 +81,4 @@ router.get('/stats/performance',
     appController.getApplicationPerformanceStats
 );
 
-module.exports = router;
+export default router;

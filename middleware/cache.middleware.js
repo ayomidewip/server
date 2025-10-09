@@ -4,9 +4,11 @@
  * Ensures that database updates also update the relevant caches
  */
 
-// Using a function to get redisClient to avoid circular dependencies
-const getRedisClient = () => require('./app.middleware').redisClient;
-const logger = require('../utils/app.logger');
+import {redisClient} from './app.middleware.js';
+import logger from '../utils/app.logger.js';
+
+// Using a function to access redisClient to keep compatibility with existing codepaths
+const getRedisClient = () => redisClient;
 
 // Check if caching is enabled via environment variable
 const isCacheEnabled = () => {
@@ -816,7 +818,7 @@ class DataManager {
 // Create singleton instance
 const dataManager = new DataManager();
 
-module.exports = {
+export {
     cache,
     cacheResponse,
     clearCache,

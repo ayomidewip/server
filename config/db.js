@@ -4,9 +4,6 @@ import logger from '../utils/app.logger.js';
 // GridFS bucket instance
 let gridFSBucket = null;
 
-// MongoDB Memory Server instance for testing
-let mongoMemoryServer = null;
-
 const connectDB = async () => {
     try {
         let uri = process.env.MONGODB_URI;
@@ -43,33 +40,30 @@ const connectDB = async () => {
         }
 
         // Initialize GridFS bucket after connection is established
+        // This needs to run every time to handle connection cycling in tests
         gridFSBucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
             bucketName: 'fs'
         });
         logger.info(`${logger.safeColor(logger.colors.cyan)}🗄️ GridFS bucket initialized${logger.safeColor(logger.colors.reset)}`);
 
         // Add connection listeners for better error handling
-        mongoose.connection.on('error', err => {
-            logger.error(`${logger.safeColor(logger.colors.red)}[Database]${logger.safeColor(logger.colors.reset)} MongoDB connection error: ${err.message}`);
-        });
+        // Only add listeners if they haven't been added before
+        if (mongoose.connection.listenerCount('error') === 0) {
+            mongoose.connection.on('error', err => {
+                logger.error(`${logger.safeColor(logger.colors.red)}[Database]${logger.safeColor(logger.colors.reset)} MongoDB connection error: ${err.message}`);
+            });
+        }
 
-        mongoose.connection.on('disconnected', () => {
-            logger.warn(`${logger.safeColor(logger.colors.yellow)}[Database]${logger.safeColor(logger.colors.reset)} MongoDB disconnected. Attempting to reconnect...`);
-        });
+        if (mongoose.connection.listenerCount('disconnected') === 0) {
+            mongoose.connection.on('disconnected', () => {
+                logger.warn(`${logger.safeColor(logger.colors.yellow)}[Database]${logger.safeColor(logger.colors.reset)} MongoDB disconnected. Attempting to reconnect...`);
+            });
+        }
 
         return connection;
     } catch (err) {
         logger.error(`${logger.safeColor(logger.colors.red)}[Database]${logger.safeColor(logger.colors.reset)} MongoDB connection failed: ${err.message}`);
         logger.error('Connection error details:', {message: err.message, stack: err.stack});
-
-        // Don't retry in test mode to avoid infinite loops
-        if (process.env.NODE_ENV !== 'test') {
-            // Retry logic for transient errors
-            if (err.name === 'MongoNetworkError' || err.message.includes('ECONNREFUSED')) {
-                logger.info(`${logger.safeColor(logger.colors.yellow)}[Database]${logger.safeColor(logger.colors.reset)} Retrying MongoDB connection in 5 seconds...`);
-                setTimeout(connectDB, 5000);
-            }
-        }
         throw err;
     }
 };
@@ -89,8 +83,17 @@ if (!process.listenerCount('SIGINT')) {
 
 // GridFS utility functions
 const getGridFSBucket = () => {
-    if (!gridFSBucket) {
-        throw new Error('GridFS bucket not initialized. Ensure database connection is established first.');
+    // If the bucket is null or the connection is not ready, re-initialize it.
+    // readyState === 1 means "connected". This makes it resilient to connection cycling during tests.
+    if (!gridFSBucket || mongoose.connection.readyState !== 1) {
+        if (mongoose.connection.readyState === 1) {
+            gridFSBucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+                bucketName: 'fs'
+            });
+            logger.info('🗄️ GridFS bucket was re-initialized.');
+        } else {
+            throw new Error('GridFS bucket could not be initialized. Database connection not ready.');
+        }
     }
     return gridFSBucket;
 };
@@ -324,12 +327,8 @@ const closeDB = async () => {
             logger.info('🔐 MongoDB connection closed');
         }
 
-        // Close MongoDB Memory Server if it was used
-        if (mongoMemoryServer) {
-            await mongoMemoryServer.stop();
-            mongoMemoryServer = null;
-            logger.info('🛑 MongoDB Memory Server stopped');
-        }
+        // Nullify the GridFS bucket to ensure it's re-initialized on next connect
+        gridFSBucket = null;
     } catch (error) {
         logger.error('Error closing database connections:', error);
         throw error;

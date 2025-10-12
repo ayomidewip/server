@@ -62,8 +62,7 @@ A comprehensive Node.js + Express server application featuring advanced file man
    MONGODB_URI=mongodb://localhost:27017/app-base-db
    
    # Redis cache (Optional but recommended)
-   REDIS_HOST=localhost
-   REDIS_PORT=6379
+   REDIS_URL=redis://localhost:6379
    CACHE_ENABLED=true
    
    # CORS - Add your frontend URL
@@ -134,16 +133,18 @@ Redis provides caching capabilities that significantly improve API performance a
 ### Configuration
 
 Update your `.env` file:
+
 ```bash
 # Local Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379
 CACHE_ENABLED=true
 
-# Remote Redis (with authentication)
-REDIS_HOST=your.remote.redis.server.com
-REDIS_PORT=6379
-REDIS_PASSWORD=your_secure_password
+# Render/Cloud Redis (they provide this format)
+REDIS_URL=redis://red-xxxxx.render.com:6379
+CACHE_ENABLED=true
+
+# With authentication
+REDIS_URL=redis://username:password@redis-host:6379
 CACHE_ENABLED=true
 ```
 

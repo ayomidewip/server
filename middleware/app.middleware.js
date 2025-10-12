@@ -37,9 +37,8 @@ const asyncHandler = (fn) => (req, res, next) => {
 let redisClient;
 
 redisClient = redis.createClient({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
     socket: {
-        host: process.env.REDIS_HOST,
-        port: parseInt(process.env.REDIS_PORT),
         reconnectStrategy: (retries) => Math.min(retries * 50, 500)
     },
     disableClientInfo: true

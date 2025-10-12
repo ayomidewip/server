@@ -5,8 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-  "test": "npm run test --prefix ../tests"
+    "dev": "nodemon index.js"
   },
   "keywords": [],
   "author": "",
@@ -29,9 +28,9 @@
     "jsonwebtoken": "^9.0.2",
     "mime-types": "^3.0.1",
     "mongodb": "^6.20.0",
-    "mongoose": "^8.19.0",
+    "mongoose": "^8.19.1",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.7",
+    "nodemailer": "^7.0.9",
     "qrcode": "^1.5.4",
     "redis": "^5.8.3",
     "sanitize-html": "^2.17.0",
@@ -43,7 +42,6 @@
     "yjs": "^13.6.27"
   },
   "devDependencies": {
-    "mongodb-memory-server": "^10.2.2",
     "nodemon": "^3.1.10",
     "y-websocket": "^3.0.0"
   }

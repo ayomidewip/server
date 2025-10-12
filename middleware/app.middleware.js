@@ -477,29 +477,18 @@ const setupCors = (app) => {
 
     const allowedOrigins = getAllowedOrigins();
     const corsOptions = {
-        origin: (origin, callback, req) => {
+        origin: (origin, callback) => {
+            // Allow requests with no origin (like health checks from Render)
+            if (!origin) {
+                return callback(null, true);
+            }
+            
             // Allow explicitly configured origins
-            if (origin && allowedOrigins.includes(origin)) {
+            if (allowedOrigins.includes(origin)) {
                 return callback(null, true);
             }
 
-            // For requests without origin header, only allow health check endpoints
-            // All other endpoints require authentication which validates the request
-            if (!origin) {
-                // Get the request path (callback might be the req in some CORS versions)
-                const requestPath = req?.path || req?.url || '';
-                const safeEndpoints = ['/health', '/api/v1/health'];
-                
-                if (safeEndpoints.includes(requestPath)) {
-                    return callback(null, true);
-                }
-                
-                // Reject no-origin requests to protected endpoints
-                logger.warn(`CORS: Rejecting no-origin request to protected endpoint: ${requestPath}`);
-                return callback(null, false);
-            }
-
-            // Reject all unauthorized origins
+            // Reject unauthorized origins with proper logging
             logger.warn(`CORS: Rejecting request from unauthorized origin: ${origin}`);
             return callback(null, false);
         },

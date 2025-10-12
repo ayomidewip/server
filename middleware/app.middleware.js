@@ -37,7 +37,7 @@ const asyncHandler = (fn) => (req, res, next) => {
 let redisClient;
 
 redisClient = redis.createClient({
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    url: process.env.REDIS_URL,
     socket: {
         reconnectStrategy: (retries) => Math.min(retries * 50, 500)
     },
@@ -477,18 +477,31 @@ const setupCors = (app) => {
 
     const allowedOrigins = getAllowedOrigins();
     const corsOptions = {
-        origin: (origin, callback) => {
-            // Log all incoming requests for debugging
-
-            // Only allow requests from explicitly configured origins
-            // Handle null/undefined origins for testing purposes (when allowedOrigins includes 'null')
-            if (allowedOrigins.includes(origin) || ((origin === null || origin === undefined) && allowedOrigins.includes('null'))) {
+        origin: (origin, callback, req) => {
+            // Allow explicitly configured origins
+            if (origin && allowedOrigins.includes(origin)) {
                 return callback(null, true);
             }
 
-            // Reject all other requests - no fallbacks for security
-            logger.warn(`CORS: Rejecting request from unauthorized origin: ${origin || 'no-origin'}`);
-            return callback(null, false); // Let CORS handle the response instead of throwing error
+            // For requests without origin header, only allow health check endpoints
+            // All other endpoints require authentication which validates the request
+            if (!origin) {
+                // Get the request path (callback might be the req in some CORS versions)
+                const requestPath = req?.path || req?.url || '';
+                const safeEndpoints = ['/health', '/api/v1/health'];
+                
+                if (safeEndpoints.includes(requestPath)) {
+                    return callback(null, true);
+                }
+                
+                // Reject no-origin requests to protected endpoints
+                logger.warn(`CORS: Rejecting no-origin request to protected endpoint: ${requestPath}`);
+                return callback(null, false);
+            }
+
+            // Reject all unauthorized origins
+            logger.warn(`CORS: Rejecting request from unauthorized origin: ${origin}`);
+            return callback(null, false);
         },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],

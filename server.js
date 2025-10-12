@@ -60,12 +60,13 @@ class Server {
 
         // Create Express app
         this.app = express();
-        
-    // Create HTTP server (shared with Express app)
-    this.httpServer = http.createServer(this.app);
+        this.app.set('trust proxy', 1);
 
-    // Initialize server and connections
-    this.server = null;
+        // Create HTTP server (shared with Express app)
+        this.httpServer = http.createServer(this.app);
+
+        // Initialize server and connections
+        this.server = null;
         this.isInitialized = false;
 
         // Store configuration
@@ -165,9 +166,6 @@ class Server {
 
         // Setup middleware
         appMiddleware.setupMiddleware(this.app);
-
-        // Enable trust proxy for Render deployment (to correctly handle X-Forwarded-For headers)
-        this.app.enable('trust proxy');
 
         // Setup basic health check route - unprotected and without API prefix
         // Health endpoints should NEVER use caching

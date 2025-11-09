@@ -116,9 +116,16 @@ const storeInGridFS = async (filePath, content, metadata = {}) => {
                 }
             });
 
-            uploadStream.on('error', reject);
+            uploadStream.on('error', (error) => {
+                logger.error('[GridFS] Upload stream error', {
+                    filePath,
+                    error: error.message,
+                    stack: error.stack
+                });
+                reject(error);
+            });
+            
             uploadStream.on('finish', () => {
-                // The uploadStream.id contains the GridFS _id
                 resolve({
                     _id: uploadStream.id,
                     filename: filePath,
@@ -126,16 +133,18 @@ const storeInGridFS = async (filePath, content, metadata = {}) => {
                 });
             });
 
-            // Handle different content types - convert to buffer if needed
             if (Buffer.isBuffer(content)) {
-                // Content is already a buffer, use as is
                 uploadStream.end(content);
             } else if (typeof content === 'string') {
-                // Content is assumed to be base64 string
                 uploadStream.end(Buffer.from(content, 'base64'));
             } else {
                 // Unknown content type
-                reject(new Error(`Unsupported content type for GridFS storage: ${typeof content}`));
+                const error = new Error(`Unsupported content type for GridFS storage: ${typeof content}`);
+                logger.error('[GridFS] Unsupported content type', {
+                    filePath,
+                    contentType: typeof content
+                });
+                reject(error);
             }
         });
     } catch (error) {
@@ -155,22 +164,11 @@ const retrieveFromGridFS = async (filePath, {asStream = false} = {}) => {
             throw new Error(`File not found in GridFS: ${filePath}`);
         }
 
-        // Get the most recent file if multiple exist
         const file = files[files.length - 1];
 
-        // Extract compression information from metadata
         const compression = file.metadata?.compression || {};
         const isCompressed = compression.isCompressed === true;
         const compressionAlgorithm = compression.algorithm;
-
-        logger.debug(`GridFS retrieval for ${filePath}:`, {
-            fileId: file._id.toString(),
-            isCompressed,
-            algorithm: compressionAlgorithm,
-            size: file.length,
-            metadata: !!file.metadata,
-            uploadDate: file.uploadDate
-        });
 
         if (asStream) {
             // When streaming a compressed file, we need to note the compression
@@ -208,24 +206,12 @@ const retrieveFromGridFS = async (filePath, {asStream = false} = {}) => {
                     const FileModel = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
                     const isTextFile = FileModel.isTextBasedFile(mimeType);
 
-                    // Extract compression information from file metadata
                     const compressionMeta = file.metadata?.compression || {};
                     const isCompressedFile = compressionMeta.isCompressed === true;
                     const compressionAlgorithm = compressionMeta.algorithm;
 
-                    // Log the details to help with debugging
-                    logger.debug(`GridFS file retrieval for ${filePath}:`, {
-                        isTextFile,
-                        mimeType,
-                        isCompressed: isCompressedFile,
-                        algorithm: compressionAlgorithm,
-                        bufferLength: buffer.length
-                    });
-
-                    // Always encode as base64 string regardless of file type or compression
                     const content = buffer.toString('base64');
 
-                    // Return all necessary metadata for proper decompression
                     resolve({
                         content, // Always base64 encoded
                         metadata: file.metadata || {},

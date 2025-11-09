@@ -179,6 +179,33 @@ const fileSchema = new mongoose.Schema({
         }
     },
 
+    // Media metadata for audio/video files
+    mediaMetadata: {
+        // Common fields (audio & video)
+        duration: { type: Number, default: 0 }, // seconds
+        bitrate: { type: Number, default: 0 }, // bits per second
+        
+        // Audio-specific fields
+        title: { type: String, maxlength: 200 },
+        artist: { type: String, maxlength: 200 },
+        album: { type: String, maxlength: 200 },
+        year: { type: Number },
+        genre: { type: String, maxlength: 100 },
+        track: { type: Number },
+        albumArtist: { type: String, maxlength: 200 },
+        
+        // Video-specific fields
+        width: { type: Number },
+        height: { type: Number },
+        fps: { type: Number },
+        videoCodec: { type: String, maxlength: 50 },
+        audioCodec: { type: String, maxlength: 50 },
+        
+        // Cover art / Thumbnail (stored in GridFS)
+        coverArtId: { type: mongoose.Schema.Types.ObjectId },
+        thumbnailId: { type: mongoose.Schema.Types.ObjectId }
+    },
+
     // Version snapshots for binary files only
     // Collaborative files use Yjs built-in versioning
     // Versions are ordered oldest-first (index 0 = version 1, index 1 = version 2, etc.)
@@ -209,6 +236,15 @@ fileSchema.index({depth: 1, owner: 1});
 fileSchema.index({'compression.isCompressed': 1, type: 1});
 fileSchema.index({'compression.algorithm': 1, 'compression.isCompressed': 1});
 fileSchema.index({type: 1, 'compression.isCompressed': 1, owner: 1});
+
+const normalizeToObjectId = (value) => {
+    if (!value) return null;
+    if (value instanceof mongoose.Types.ObjectId) return value;
+    if (typeof value === 'string' && mongoose.Types.ObjectId.isValid(value)) {
+        return new mongoose.Types.ObjectId(value);
+    }
+    return null;
+};
 
 // Text search index
 fileSchema.index({fileName: 'text', filePath: 'text'});
@@ -804,11 +840,16 @@ fileSchema.methods.hasWriteAccess = function(userId, userRoles = []) {
 
 // Static method to find files with read permission
 fileSchema.statics.findWithReadPermission = function(query, userId, userRoles = []) {
+    const normalizedUserId = normalizeToObjectId(userId);
+    if (!normalizedUserId) {
+        return this.find({ ...query, _id: null });
+    }
+
     const permissionQuery = {
         $or: [
-            { owner: userId },
-            { 'permissions.read': userId },
-            { 'permissions.write': userId }
+            { owner: normalizedUserId },
+            { 'permissions.read': normalizedUserId },
+            { 'permissions.write': normalizedUserId }
         ]
     };
     
@@ -819,11 +860,16 @@ fileSchema.statics.findWithReadPermission = function(query, userId, userRoles = 
 
 // Static method to find one file with read permission
 fileSchema.statics.findOneWithReadPermission = function(query, userId, userRoles = []) {
+    const normalizedUserId = normalizeToObjectId(userId);
+    if (!normalizedUserId) {
+        return this.findOne({ ...query, _id: null });
+    }
+
     const permissionQuery = {
         $or: [
-            { owner: userId },
-            { 'permissions.read': userId },
-            { 'permissions.write': userId }
+            { owner: normalizedUserId },
+            { 'permissions.read': normalizedUserId },
+            { 'permissions.write': normalizedUserId }
         ]
     };
     
@@ -834,10 +880,15 @@ fileSchema.statics.findOneWithReadPermission = function(query, userId, userRoles
 
 // Static method to find files with write permission
 fileSchema.statics.findWithWritePermission = function(query, userId, userRoles = []) {
+    const normalizedUserId = normalizeToObjectId(userId);
+    if (!normalizedUserId) {
+        return this.find({ ...query, _id: null });
+    }
+
     const permissionQuery = {
         $or: [
-            { owner: userId },
-            { 'permissions.write': userId }
+            { owner: normalizedUserId },
+            { 'permissions.write': normalizedUserId }
         ]
     };
     
@@ -848,10 +899,15 @@ fileSchema.statics.findWithWritePermission = function(query, userId, userRoles =
 
 // Static method to find one file with write permission
 fileSchema.statics.findOneWithWritePermission = function(query, userId, userRoles = []) {
+    const normalizedUserId = normalizeToObjectId(userId);
+    if (!normalizedUserId) {
+        return this.findOne({ ...query, _id: null });
+    }
+
     const permissionQuery = {
         $or: [
-            { owner: userId },
-            { 'permissions.write': userId }
+            { owner: normalizedUserId },
+            { 'permissions.write': normalizedUserId }
         ]
     };
     

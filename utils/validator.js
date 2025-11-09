@@ -37,12 +37,13 @@ const customJoi = JoiBase.extend((joi) => ({
     type: 'password',
     base: joi.string(),
     messages: {
-        'password.complexity': 'Password must contain 8-30 characters with uppercase, lowercase, number and special character'
+        'password.complexity': 'Password must contain 8-30 characters with at least one uppercase letter, one lowercase letter, one number, and one special character'
     },
     rules: {
         complexity: {
             validate(value, helpers) {
-                const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,30}$/;
+                // More flexible regex that accepts all common special characters
+                const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`])[A-Za-z\d!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]{8,30}$/;
                 if (!passwordRegex.test(value)) {
                     return helpers.error('password.complexity');
                 }

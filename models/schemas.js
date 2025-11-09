@@ -31,7 +31,7 @@ export const authSchemas = {
                 'string.email': 'Please enter a valid email address', 'any.required': 'Email is required'
             }), password: password().required()
             .messages({
-                'password.complexity': 'Password must contain 8-30 characters with uppercase, lowercase, number and special character',
+                'password.complexity': 'Password must contain 8-30 characters with at least one uppercase letter, one lowercase letter, one number, and one special character',
                 'any.required': 'Password is required'
             }), roles: Joi.array().items(Joi.string().valid(...VALID_ROLES))
     }),
@@ -54,7 +54,7 @@ export const authSchemas = {
     }), resetPassword: Joi.object({
         password: password().required()
             .messages({
-                'password.complexity': 'Password must contain 8-30 characters with uppercase, lowercase, number and special character',
+                'password.complexity': 'Password must contain 8-30 characters with at least one uppercase letter, one lowercase letter, one number, and one special character',
                 'any.required': 'Password is required'
             }), confirmPassword: Joi.string().optional()
             .messages({
@@ -98,7 +98,7 @@ export const userSchemas = {
                 'string.email': 'Please enter a valid email address', 'any.required': 'Email is required'
             }), password: password().required()
             .messages({
-                'password.complexity': 'Password must contain 8-30 characters with uppercase, lowercase, number and special character',
+                'password.complexity': 'Password must contain 8-30 characters with at least one uppercase letter, one lowercase letter, one number, and one special character',
                 'any.required': 'Password is required'
             }), profilePhoto: Joi.string(), roles: Joi.array().items(Joi.string().valid(...VALID_ROLES))
     }), updateUser: Joi.object({
@@ -119,7 +119,7 @@ export const userSchemas = {
         newPassword: password()
             .required()
             .messages({
-                'password.complexity': 'Password must contain 8-30 characters with uppercase, lowercase, number and special character',
+                'password.complexity': 'Password must contain 8-30 characters with at least one uppercase letter, one lowercase letter, one number, and one special character',
                 'any.required': 'New password is required'
             })
     })

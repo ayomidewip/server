@@ -201,6 +201,26 @@ router.get('/:filePath/download',
     fileController.downloadFile
 );
 
+/**
+ * @route   GET /api/v1/files/:filePath/cover
+ * @desc    Get cover art for audio file
+ * @access  Private (requires authentication)
+ */
+router.get('/:filePath/cover',
+    validateRequest(fileParamSchemas.filePath, 'params'),
+    fileController.getMediaImage
+);
+
+/**
+ * @route   GET /api/v1/files/:filePath/thumbnail
+ * @desc    Get thumbnail for video file
+ * @access  Private (requires authentication)
+ */
+router.get('/:filePath/thumbnail',
+    validateRequest(fileParamSchemas.filePath, 'params'),
+    fileController.getMediaImage
+);
+
 // GET /files/:filePath/mime-info removed - use WebSocket 'getMetadata' operation instead
 
 /**

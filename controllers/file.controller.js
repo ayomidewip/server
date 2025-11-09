@@ -8,6 +8,7 @@ import {sanitizeHtmlInObject} from '../utils/sanitize.js';
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import path from 'node:path';
+import fs from 'node:fs';
 import {parseFilters} from './app.controller.js';
 import {
     getCompressionStats,
@@ -17,7 +18,11 @@ import {
     getFileNotificationService,
     FILE_EVENTS
 } from '../middleware/file.middleware.js';
-import {renameInGridFS} from '../config/db.js';
+import {renameInGridFS, getGridFSBucket, storeInGridFS, retrieveFromGridFS} from '../config/db.js';
+import {parseBuffer} from 'music-metadata';
+import ffmpeg from 'fluent-ffmpeg';
+import sharp from 'sharp';
+
 const yjsService = getYjsService();
 
 // Import notification service from file middleware
@@ -57,46 +62,319 @@ const compressAndStore = async (file, rawContent) => {
  * Get content from file - handles text (Yjs read-only) and binary (GridFS) files
  */
 const getAndDecompress = async (file) => {
+    if (file.type === 'text') {
+        return file.filePath ? await yjsService.getTextContent(file.filePath) : '';
+    }
+    
+    if (file.type === 'binary') {
+        const base64Content = await file.getContent();
+        return base64Content ? Buffer.from(base64Content, 'base64') : Buffer.from('');
+    }
+    
+    if (file.type === 'directory') return '';
+    
+    throw new Error(`Unsupported file type: ${file.type}`);
+};
+
+// =============================================================================
+// MEDIA METADATA EXTRACTION
+// =============================================================================
+
+/**
+ * Write buffer to temporary file for ffprobe processing
+ * @param {Buffer} buffer - File buffer
+ * @param {string} fileName - Original filename
+ * @returns {Promise<string>} Path to temporary file
+ */
+const writeTempFile = async (buffer, fileName) => {
+    const os = require('os');
+    const tempDir = os.tmpdir();
+    const ext = path.extname(fileName);
+    const tempPath = path.join(tempDir, `upload_${Date.now()}_${Math.random().toString(36).substring(7)}${ext}`);
+    
+    await fs.promises.writeFile(tempPath, buffer);
+    return tempPath;
+};
+
+/**
+ * Extract metadata from audio files (MP3, WAV, M4A, FLAC, etc.)
+ * @param {Buffer} fileBuffer - Audio file buffer
+ * @param {string} fileName - Original filename
+ * @returns {Promise<object>} Extracted metadata
+ */
+const extractAudioMetadata = async (fileBuffer, fileName) => {
     try {
-        // Handle text files through Yjs (READ-ONLY)
-        if (file.type === 'text') {
-            if (!file.filePath) {
-                logger.warn('Text file missing file path', {
-                    fileId: file._id,
-                    filePath: file.filePath
-                });
-                return '';
-            }
-            return await yjsService.getTextContent(file.filePath);
-        }
-        
-        // Handle binary files through GridFS
-        if (file.type === 'binary') {
-            const base64Content = await file.getContent();
-            
-            // Return empty if no content
-            if (!base64Content) {
-                return Buffer.from('');
-            }
-            
-            // Decode the base64 content and return as buffer
-            return Buffer.from(base64Content, 'base64');
-        }
-        
-        // Handle directories
-        if (file.type === 'directory') {
-            return '';
-        }
-        
-        throw new Error(`Unsupported file type: ${file.type}`);
-        
-    } catch (error) {
-        logger.error('Content retrieval failed', {
-            error: error.message,
-            fileId: file._id,
-            fileType: file.type
+        const metadata = await parseBuffer(fileBuffer, {
+            mimeType: null,
+            size: fileBuffer.length,
+            path: fileName
         });
-        throw error;
+
+        const extracted = {
+            duration: metadata.format.duration || 0,
+            bitrate: metadata.format.bitrate || 0,
+            sampleRate: metadata.format.sampleRate || 0,
+            channels: metadata.format.numberOfChannels || 0,
+            codec: metadata.format.codec || metadata.format.container || 'unknown',
+            
+            // ID3 tags
+            title: metadata.common.title || null,
+            artist: metadata.common.artist || metadata.common.artists?.join(', ') || null,
+            album: metadata.common.album || null,
+            year: metadata.common.year || null,
+            genre: metadata.common.genre?.join(', ') || null,
+            track: metadata.common.track?.no || null,
+            trackTotal: metadata.common.track?.of || null,
+            disc: metadata.common.disk?.no || null,
+            discTotal: metadata.common.disk?.of || null,
+            albumArtist: metadata.common.albumartist || null,
+            composer: metadata.common.composer?.join(', ') || null,
+            comment: metadata.common.comment?.join(', ') || null,
+            bpm: metadata.common.bpm || null,
+            
+            // Album art (cover image)
+            coverArt: null
+        };
+
+        // Extract album art if present
+        if (metadata.common.picture && metadata.common.picture.length > 0) {
+            const picture = metadata.common.picture[0];
+            
+            try {
+                const resizedCover = await sharp(picture.data)
+                    .resize(500, 500, { fit: 'inside', withoutEnlargement: true })
+                    .jpeg({ quality: 85 })
+                    .toBuffer();
+                
+                extracted.coverArt = {
+                    data: resizedCover,
+                    mimeType: picture.format || 'image/jpeg',
+                    description: picture.description || 'Album Cover'
+                };
+            } catch (coverError) {
+                logger.warn('Failed to process album art', {
+                    fileName,
+                    error: coverError.message
+                });
+            }
+        }
+
+        return extracted;
+    } catch (error) {
+        logger.error('Audio metadata extraction failed', {
+            fileName,
+            error: error.message,
+            stack: error.stack
+        });
+        return {
+            duration: 0,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Extract metadata from video files (MP4, WebM, AVI, MKV, etc.)
+ * @param {Buffer} fileBuffer - Video file buffer
+ * @param {string} fileName - Original filename  
+ * @param {string} tempFilePath - Temporary file path for ffprobe
+ * @returns {Promise<object>} Extracted metadata
+ */
+const extractVideoMetadata = async (fileBuffer, fileName, tempFilePath) => {
+    logger.debug('Starting video metadata extraction', { 
+        fileName, 
+        bufferSize: fileBuffer.length,
+        tempFilePath 
+    });
+    
+    return new Promise((resolve) => {
+        const extracted = {
+            duration: 0,
+            width: 0,
+            height: 0,
+            fps: 0,
+            bitrate: 0,
+            videoCodec: null,
+            audioCodec: null,
+            title: null,
+            description: null,
+            author: null,
+            copyright: null,
+            thumbnail: null,
+            error: null
+        };
+
+        ffmpeg.ffprobe(tempFilePath, async (err, metadata) => {
+            if (err) {
+                logger.error('Video metadata extraction failed (ffprobe error)', {
+                    fileName,
+                    error: err.message,
+                    stack: err.stack
+                });
+                extracted.error = err.message;
+                return resolve(extracted);
+            }
+
+            try {
+                // Format metadata
+                if (metadata.format) {
+                    extracted.duration = metadata.format.duration || 0;
+                    extracted.bitrate = metadata.format.bit_rate || 0;
+                    
+                    // Extract container metadata tags
+                    const tags = metadata.format.tags || {};
+                    extracted.title = tags.title || tags.Title || null;
+                    extracted.description = tags.description || tags.Description || tags.comment || null;
+                    extracted.author = tags.artist || tags.Artist || tags.author || tags.Author || null;
+                    extracted.copyright = tags.copyright || tags.Copyright || null;
+                }
+
+                // Stream metadata
+                if (metadata.streams && metadata.streams.length > 0) {
+                    const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+                    const audioStream = metadata.streams.find(s => s.codec_type === 'audio');
+                    
+                    if (videoStream) {
+                        extracted.width = videoStream.width || 0;
+                        extracted.height = videoStream.height || 0;
+                        extracted.videoCodec = videoStream.codec_name || null;
+                        
+                        // Calculate FPS
+                        if (videoStream.r_frame_rate) {
+                            const [num, den] = videoStream.r_frame_rate.split('/').map(Number);
+                            extracted.fps = den ? Math.round(num / den) : 0;
+                        }
+                    }
+                    
+                    if (audioStream) {
+                        extracted.audioCodec = audioStream.codec_name || null;
+                    }
+                }
+
+                // Generate thumbnail from video
+                if (extracted.duration > 0) {
+                    try {
+                        // Seek to 10% of video duration for thumbnail
+                        const seekTime = Math.max(1, Math.floor(extracted.duration * 0.1));
+                        
+                        logger.debug('Generating video thumbnail', {
+                            fileName,
+                            seekTime,
+                            duration: extracted.duration
+                        });
+                        
+                        await new Promise((thumbResolve, thumbReject) => {
+                            ffmpeg(tempFilePath)
+                                .screenshots({
+                                    timestamps: [seekTime],
+                                    size: '640x?',
+                                    folder: '/tmp',
+                                    filename: `thumb-${Date.now()}.jpg`
+                                })
+                                .on('end', async (stdout, filenames) => {
+                                    try {
+                                        const fs = await import('fs/promises');
+                                        const thumbPath = `/tmp/${filenames[0]}`;
+                                        const thumbBuffer = await fs.readFile(thumbPath);
+                                        
+                                        const optimizedThumb = await sharp(thumbBuffer)
+                                            .resize(640, 360, { fit: 'inside', withoutEnlargement: true })
+                                            .jpeg({ quality: 80 })
+                                            .toBuffer();
+                                        
+                                        extracted.thumbnail = {
+                                            data: optimizedThumb,
+                                            mimeType: 'image/jpeg'
+                                        };
+                                        
+                                        await fs.unlink(thumbPath).catch(() => {});
+                                        thumbResolve();
+                                    } catch (thumbError) {
+                                        logger.warn('Thumbnail processing failed', {
+                                            fileName,
+                                            error: thumbError.message
+                                        });
+                                        thumbReject(thumbError);
+                                    }
+                                })
+                                .on('error', (thumbError) => {
+                                    logger.warn('Thumbnail generation failed', {
+                                        fileName,
+                                        error: thumbError.message
+                                    });
+                                    thumbReject(thumbError);
+                                });
+                        });
+                    } catch (thumbnailError) {
+                        // Non-fatal: continue without thumbnail
+                    }
+                }
+
+                resolve(extracted);
+            } catch (parseError) {
+                logger.error('Video metadata parsing failed', {
+                    fileName,
+                    error: parseError.message,
+                    stack: parseError.stack
+                });
+                extracted.error = parseError.message;
+                resolve(extracted);
+            }
+        });
+    });
+};
+
+/**
+ * Extract metadata based on file type
+ * @param {Buffer} fileBuffer - File buffer
+ * @param {string} fileName - Original filename
+ * @param {string} mimeType - File MIME type
+ * @returns {Promise<object|null>} Extracted metadata or null
+ */
+const extractMediaMetadata = async (fileBuffer, fileName, mimeType) => {
+    let tempFilePath = null;
+    
+    logger.debug('Media metadata extraction requested', {
+        fileName,
+        mimeType,
+        bufferSize: fileBuffer.length,
+        isAudio: mimeType?.startsWith('audio/'),
+        isVideo: mimeType?.startsWith('video/')
+    });
+    
+    try {
+        if (mimeType?.startsWith('audio/')) {
+            logger.debug('Routing to audio metadata extraction', { fileName });
+            return await extractAudioMetadata(fileBuffer, fileName);
+        } else if (mimeType?.startsWith('video/')) {
+            logger.debug('Routing to video metadata extraction', { fileName });
+            // Video processing needs a temp file for ffprobe
+            tempFilePath = await writeTempFile(fileBuffer, fileName);
+            logger.debug('Temp file created for video processing', { fileName, tempFilePath });
+            return await extractVideoMetadata(fileBuffer, fileName, tempFilePath);
+        }
+        
+        logger.debug('No metadata extraction for MIME type', { fileName, mimeType });
+        return null;
+    } catch (error) {
+        logger.error('Media metadata extraction failed', {
+            fileName,
+            mimeType,
+            error: error.message,
+            stack: error.stack
+        });
+        return null;
+    } finally {
+        if (tempFilePath) {
+            try {
+                await fs.promises.unlink(tempFilePath);
+            } catch (cleanupError) {
+                logger.warn('Failed to cleanup temp file', {
+                    tempFilePath,
+                    error: cleanupError.message
+                });
+            }
+        }
     }
 };
 
@@ -165,12 +443,8 @@ const ensureParentDirs = async (filePath, userId) => {
     }
 };
 
-const normalizeFilePath = (filePath = '') => {
-    if (!filePath) {
-        throw new Error('File path is required');
-    }
-    return filePath.startsWith('/') ? filePath : `/${filePath}`;
-};
+const normalizeFilePath = (filePath = '') => 
+    filePath ? (filePath.startsWith('/') ? filePath : `/${filePath}`) : '/';
 
 /**
  * Get user ID from request consistently
@@ -222,15 +496,41 @@ const decodeFilePath = (encodedPath) => {
     }
 };
 
-const respondWithOperation = (res, result, defaultStatus = 200) => {
-    if (!result || result.success === false) {
-        const status = result?.statusCode || 400;
-        const message = result?.error || result?.message || 'Operation failed';
-        throw new AppError(message, status);
+/**
+ * Helper function to stream media metadata images (cover art or thumbnails)
+ */
+const streamMediaImage = async (req, res, imageType) => {
+    const file = await File.findOneWithReadPermission(
+        { filePath: decodeFilePath(req.params.filePath) },
+        getUserId(req),
+        req.user?.roles || []
+    );
+
+    const imageIdField = imageType === 'coverArt' ? 'coverArtId' : 'thumbnailId';
+    const imageId = file?.mediaMetadata?.[imageIdField];
+
+    if (!imageId) {
+        throw new AppError(`${imageType === 'coverArt' ? 'Cover art' : 'Thumbnail'} not found`, 404);
     }
 
-    const status = result.statusCode || defaultStatus;
-    res.status(status).json(result);
+    const downloadStream = getGridFSBucket().openDownloadStream(imageId);
+    
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    
+    downloadStream.on('error', (error) => {
+        logger.error(`${imageType} stream error`, { error: error.message, fileId: file._id, imageId });
+        if (!res.headersSent) res.status(500).end();
+    });
+
+    downloadStream.pipe(res);
+};
+
+const respondWithOperation = (res, result, defaultStatus = 200) => {
+    if (!result || result.success === false) {
+        throw new AppError(result?.error || result?.message || 'Operation failed', result?.statusCode || 400);
+    }
+    res.status(result.statusCode || defaultStatus).json(result);
 };
 
 
@@ -944,34 +1244,70 @@ const fileController = {
         }
 
         try {
-            // Set standardized response headers for file download
-            const escapedFileName = file.fileName.replace(/["\\]/g, '\\$&');
-            res.setHeader('Content-Disposition', `attachment; filename="${escapedFileName}"`);
-            res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-            res.setHeader('Cache-Control', 'no-cache');
+            const isStreamable = file.mimeType?.startsWith('video/') || file.mimeType?.startsWith('audio/');
+            const range = req.headers.range;
 
-            // Get file content and send it (decompressed for download)
-            const fileContent = await getAndDecompress(file);
-            
-            // Handle different content types appropriately
-            if (Buffer.isBuffer(fileContent)) {
-                // For binary files, send buffer directly
-                res.setHeader('Content-Length', fileContent.length);
-                res.send(fileContent);
+            // Stream media files directly from GridFS for optimal performance
+            if (isStreamable && file.type === 'binary') {
+                const { size: fileSize } = await retrieveFromGridFS(file.filePath, { asStream: true });
+                const bucket = getGridFSBucket();
+
+                // Parse range if provided
+                let start = 0, end = fileSize - 1, statusCode = 200;
+                if (range) {
+                    const parts = range.replace(/bytes=/, '').split('-');
+                    start = parseInt(parts[0], 10);
+                    end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+                    if (start >= fileSize || end >= fileSize) {
+                        return res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end();
+                    }
+                    statusCode = 206;
+                    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                }
+
+                // Set response headers
+                res.status(statusCode);
+                res.setHeader('Accept-Ranges', 'bytes');
+                res.setHeader('Content-Length', (end - start) + 1);
+                res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+                res.setHeader('Cache-Control', 'public, max-age=3600');
+
+                // Stream from GridFS
+                const downloadStream = bucket.openDownloadStreamByName(file.filePath, {
+                    start,
+                    end: end + 1
+                });
+
+                downloadStream.on('error', (error) => {
+                    logger.error('Stream error', { error: error.message, filePath: decodedFilePath });
+                    if (!res.headersSent) res.status(500).end();
+                });
+
+                downloadStream.pipe(res);
+
+                logger.debug('File streamed', {
+                    filePath: decodedFilePath,
+                    range: `${start}-${end}/${fileSize}`,
+                    userId
+                });
             } else {
-                // For text files returned as strings, convert to buffer for download
-                const contentBuffer = Buffer.from(fileContent, 'utf8');
+                // Non-streamable files - load into memory
+                const fileContent = await getAndDecompress(file);
+                const contentBuffer = Buffer.isBuffer(fileContent) ? fileContent : Buffer.from(fileContent, 'utf8');
+                const escapedFileName = file.fileName.replace(/["\\]/g, '\\$&');
+
+                res.setHeader('Content-Disposition', `attachment; filename="${escapedFileName}"`);
+                res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
                 res.setHeader('Content-Length', contentBuffer.length);
                 res.send(contentBuffer);
-            }
 
-            logger.info('File downloaded successfully', {
-                filePath: decodedFilePath,
-                fileName: file.fileName,
-                fileSize: file.size,
-                userId,
-                fileId: file._id
-            });
+                logger.info('File downloaded', {
+                    filePath: decodedFilePath,
+                    size: contentBuffer.length,
+                    userId
+                });
+            }
 
         } catch (error) {
             logger.error('Download file error', {
@@ -986,6 +1322,17 @@ const fileController = {
             }
         }
     }),
+
+    /**
+     * @desc    Get media image (cover art or thumbnail)
+     * @route   GET /api/v1/files/:filePath/cover OR /api/v1/files/:filePath/thumbnail
+     * @access  Private (requires read permission)
+     */
+    getMediaImage: asyncHandler(async (req, res) => {
+        const imageType = req.path.endsWith('/cover') ? 'coverArt' : 'thumbnail';
+        await streamMediaImage(req, res, imageType);
+    }),
+
     /**
      * @desc    Get directory tree structure
      * @route   GET /api/v1/files/tree
@@ -2277,9 +2624,11 @@ const fileController = {
 
         for (const uploadedFile of req.files) {
             try {
-                // Standardized path construction
-                const filePath = path.posix.join(basePath, uploadedFile.originalname);
-                const fileType = File.getFileType(uploadedFile.originalname);
+                // Standardized path construction with Unicode normalization (NFC)
+                // This prevents URL encoding issues with accented characters
+                const normalizedFilename = uploadedFile.originalname.normalize('NFC');
+                const filePath = path.posix.join(basePath, normalizedFilename);
+                const fileType = File.getFileType(normalizedFilename);
 
                 // Check if file already exists
                 const existingFile = await File.findOne({
@@ -2327,13 +2676,13 @@ const fileController = {
                     // Ensure parent directories exist
                     await ensureParentDirs(filePath, userId);
                     
-                    // Create new file
+                    // Create new file with normalized filename
                     file = await File.create({
                         filePath,
-                        fileName: uploadedFile.originalname,
+                        fileName: normalizedFilename,
                         type: fileType,
                         mimeType: uploadedFile.mimetype,
-                        description: description || `Uploaded file: ${uploadedFile.originalname}`,
+                        description: description || `Uploaded file: ${normalizedFilename}`,
                         tags: parsedTags || [],
                         permissions: parsedPermissions || { read: [], write: [] },
                         owner: userId,
@@ -2353,17 +2702,57 @@ const fileController = {
                     }
                 }
 
+                // Extract and store metadata for audio/video files
+                if (uploadedFile.mimetype.startsWith('audio/') || uploadedFile.mimetype.startsWith('video/')) {
+                    try {
+                        const metadata = await extractMediaMetadata(
+                            uploadedFile.buffer,
+                            uploadedFile.originalname,
+                            uploadedFile.mimetype
+                        );
+                        
+                        if (metadata) {
+                            if (metadata.coverArt?.data) {
+                                const result = await storeInGridFS(
+                                    `${file._id}_cover.jpg`,
+                                    metadata.coverArt.data,
+                                    { mimeType: metadata.coverArt.mimeType || 'image/jpeg' }
+                                );
+                                metadata.coverArtId = result._id;
+                                delete metadata.coverArt;
+                            }
+                            
+                            if (metadata.thumbnail?.data) {
+                                const result = await storeInGridFS(
+                                    `${file._id}_thumbnail.jpg`,
+                                    metadata.thumbnail.data,
+                                    { mimeType: metadata.thumbnail.mimeType || 'image/jpeg' }
+                                );
+                                metadata.thumbnailId = result._id;
+                                delete metadata.thumbnail;
+                            }
+                            
+                            file.mediaMetadata = metadata;
+                            await file.save();
+                        }
+                    } catch (metadataError) {
+                        logger.warn('Failed to extract media metadata', {
+                            error: metadataError.message,
+                            fileName: uploadedFile.originalname,
+                            fileId: file._id
+                        });
+                    }
+                }
+
                 await file.populate('owner lastModifiedBy', 'firstName lastName username email');
                 uploadedFiles.push(file);
 
                 logger.info('File uploaded successfully', {
                     fileName: uploadedFile.originalname,
                     size: uploadedFile.size,
-                    storageType: file.storageType,
                     userId,
                     fileId: file._id,
-                    filePath,
-                    type: fileType
+                    filePath: file.filePath
                 });
 
             } catch (fileError) {
@@ -2413,13 +2802,14 @@ async function executeFileOperation(operation, data, userId, userRoles = []) {
     const { filePath, sourcePath, content, message, destinationPath, dirPath } = data;
     
     // Determine the effective file path based on operation type (declare outside try block for error logging)
+    // Normalize to NFC to prevent Unicode encoding issues
     let effectiveFilePath;
     if (operation === 'copy' || operation === 'move') {
-        effectiveFilePath = sourcePath;
+        effectiveFilePath = sourcePath?.normalize('NFC');
     } else if (operation === 'createDir') {
-        effectiveFilePath = dirPath || filePath;
+        effectiveFilePath = (dirPath || filePath)?.normalize('NFC');
     } else {
-        effectiveFilePath = filePath;
+        effectiveFilePath = filePath?.normalize('NFC');
     }
     
     try {
@@ -2565,6 +2955,7 @@ async function executeFileOperation(operation, data, userId, userRoles = []) {
                     createdAt: metaFile.createdAt,
                     updatedAt: effectiveUpdatedAt, // Use enhanced last modified time
                     lastModifiedBy: metaFile.lastModifiedBy,
+                    mediaMetadata: metaFile.mediaMetadata || null, // Include media metadata for audio/video files
                     timestamp: new Date().toISOString()
                 };
                 

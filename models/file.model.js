@@ -237,15 +237,6 @@ fileSchema.index({'compression.isCompressed': 1, type: 1});
 fileSchema.index({'compression.algorithm': 1, 'compression.isCompressed': 1});
 fileSchema.index({type: 1, 'compression.isCompressed': 1, owner: 1});
 
-const normalizeToObjectId = (value) => {
-    if (!value) return null;
-    if (value instanceof mongoose.Types.ObjectId) return value;
-    if (typeof value === 'string' && mongoose.Types.ObjectId.isValid(value)) {
-        return new mongoose.Types.ObjectId(value);
-    }
-    return null;
-};
-
 // Text search index
 fileSchema.index({fileName: 'text', filePath: 'text'});
 
@@ -840,16 +831,11 @@ fileSchema.methods.hasWriteAccess = function(userId, userRoles = []) {
 
 // Static method to find files with read permission
 fileSchema.statics.findWithReadPermission = function(query, userId, userRoles = []) {
-    const normalizedUserId = normalizeToObjectId(userId);
-    if (!normalizedUserId) {
-        return this.find({ ...query, _id: null });
-    }
-
     const permissionQuery = {
         $or: [
-            { owner: normalizedUserId },
-            { 'permissions.read': normalizedUserId },
-            { 'permissions.write': normalizedUserId }
+            { owner: userId },
+            { 'permissions.read': userId },
+            { 'permissions.write': userId }
         ]
     };
     
@@ -860,16 +846,11 @@ fileSchema.statics.findWithReadPermission = function(query, userId, userRoles = 
 
 // Static method to find one file with read permission
 fileSchema.statics.findOneWithReadPermission = function(query, userId, userRoles = []) {
-    const normalizedUserId = normalizeToObjectId(userId);
-    if (!normalizedUserId) {
-        return this.findOne({ ...query, _id: null });
-    }
-
     const permissionQuery = {
         $or: [
-            { owner: normalizedUserId },
-            { 'permissions.read': normalizedUserId },
-            { 'permissions.write': normalizedUserId }
+            { owner: userId },
+            { 'permissions.read': userId },
+            { 'permissions.write': userId }
         ]
     };
     
@@ -880,15 +861,10 @@ fileSchema.statics.findOneWithReadPermission = function(query, userId, userRoles
 
 // Static method to find files with write permission
 fileSchema.statics.findWithWritePermission = function(query, userId, userRoles = []) {
-    const normalizedUserId = normalizeToObjectId(userId);
-    if (!normalizedUserId) {
-        return this.find({ ...query, _id: null });
-    }
-
     const permissionQuery = {
         $or: [
-            { owner: normalizedUserId },
-            { 'permissions.write': normalizedUserId }
+            { owner: userId },
+            { 'permissions.write': userId }
         ]
     };
     
@@ -899,15 +875,10 @@ fileSchema.statics.findWithWritePermission = function(query, userId, userRoles =
 
 // Static method to find one file with write permission
 fileSchema.statics.findOneWithWritePermission = function(query, userId, userRoles = []) {
-    const normalizedUserId = normalizeToObjectId(userId);
-    if (!normalizedUserId) {
-        return this.findOne({ ...query, _id: null });
-    }
-
     const permissionQuery = {
         $or: [
-            { owner: normalizedUserId },
-            { 'permissions.write': normalizedUserId }
+            { owner: userId },
+            { 'permissions.write': userId }
         ]
     };
     

@@ -6,7 +6,11 @@ import handlebars from 'handlebars';
 import nodemailer from 'nodemailer';
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {AppError} from '../middleware/error.middleware.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {asyncHandler, redisClient as sharedRedisClient} from '../middleware/app.middleware.js';
 import {GridFSBucket} from 'mongodb';
 
@@ -1487,7 +1491,7 @@ const loadTemplate = async (templateName) => {
  * @param {Object} [transporter] - Email transporter (passed from server)
  * @returns {Promise<Object>} - Email send result
  */
-const sendEmail = async ({to, subject, template, data, from}, transporter = null) => {
+const sendEmail = async ({to, subject, template, data, from, replyTo}, transporter = null) => {
     try {
         if (!transporter) {
             logger.warn(`Email transporter not provided, skipping email to ${to} with template ${template}`);
@@ -1505,7 +1509,11 @@ const sendEmail = async ({to, subject, template, data, from}, transporter = null
 
         // Prepare email options
         const mailOptions = {
-            from: from || process.env.EMAIL_FROM, to, subject, html: htmlContent
+            from: from || process.env.EMAIL_FROM, 
+            to, 
+            subject, 
+            html: htmlContent,
+            replyTo
         };
 
         // Send email
@@ -2670,6 +2678,67 @@ const getApplicationPerformanceStats = asyncHandler(async (req, res, next) => {
     }
 });
 
+/**
+ * @desc    Submit contact form
+ * @route   POST /api/v1/contact
+ * @access  Public
+ */
+const submitContactForm = asyncHandler(async (req, res, next) => {
+    const { name, email, phone, description } = req.body;
+
+    if (!name || !email || !description) {
+        return next(new AppError('Please provide name, email and description', 400));
+    }
+
+    // Initialize email service if not ready
+    if (!emailTransporter) {
+        emailTransporter = await initializeEmailService();
+    }
+
+    if (!emailTransporter) {
+        // Log the attempt even if email fails, so we don't lose the lead
+        logger.error('Contact form submission failed: Email service not configured', { contactData: req.body });
+        return next(new AppError('Email service is currently unavailable. Please try again later.', 503));
+    }
+
+    // Send response immediately to avoid blocking on SMTP operations
+    res.status(200).json({
+        success: true,
+        message: 'Thank you! Your message has been sent successfully.'
+    });
+
+    // Send emails in background
+    Promise.all([
+        // Email to Admin
+        sendEmail({
+            to: 'ayo@eccco.space',
+            subject: `New Contact Form Submission from ${name}`,
+            template: 'contact-form',
+            data: {
+                name,
+                email,
+                phone: phone || 'Not provided',
+                description
+            },
+            replyTo: email 
+        }, emailTransporter),
+
+        // Confirmation Email to User
+        sendEmail({
+            to: email,
+            subject: 'We received your message - App-Base',
+            template: 'contact-confirmation',
+            data: {
+                name,
+                description
+            }
+        }, emailTransporter)
+    ]).catch(error => {
+        // Log error since we can't return it to the user anymore
+        logger.error('Error sending contact form emails (background process):', error);
+    });
+});
+
 export {
     getHealth,
     getApiHealth,
@@ -2682,6 +2751,7 @@ export {
     clearLogs,
     getApplicationOverviewStats,
     getApplicationPerformanceStats,
+    submitContactForm,
     loadTemplate,
     sendEmail,
     clearTemplateCache,

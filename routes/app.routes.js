@@ -17,12 +17,16 @@ router.validRoutes = [
     '/api/v1/email/template/render',
     '/api/v1/email/test',
     '/api/v1/stats/overview',
-    '/api/v1/stats/performance'
+    '/api/v1/stats/performance',
+    '/api/v1/contact'
 ];
 
 // Health check route - NO CACHING (health endpoints should always be real-time)
 router.get('/health', noCacheResponse(), // Use no-cache middleware instead of cacheResponse
     appController.getApiHealth);
+
+// Contact form submission (public)
+router.post('/contact', appController.submitContactForm);
 
 // Get logs route (admin only)
 router.get('/logs', authMiddleware.verifyToken(), authMiddleware.checkPermission(RIGHTS.MANAGE_ALL_USERS), cacheResponse(30, (req) => {

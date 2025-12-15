@@ -1,12 +1,158 @@
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 import {hasRight, hasRole, ROLES, RIGHTS} from '../config/rights.js';
 import {normalizeRoles} from './user.middleware.js';
 import {cache} from './cache.middleware.js';
-import logger from '../utils/app.logger.js'; // Added logger
-import User from '../models/user.model.js'; // Added User model for active status check
+import logger from '../utils/app.logger.js';
+import User from '../models/user.model.js';
 import cookie from 'cookie';
 import cookieParserLib from 'cookie-parser';
 import {parse as parseUrl} from 'node:url';
+
+// =============================================================================
+// CSRF PROTECTION CONFIGURATION
+// =============================================================================
+
+const CSRF_TOKEN_LENGTH = 32;
+const CSRF_COOKIE_NAME = 'csrfToken';
+const CSRF_HEADER_NAME = 'x-csrf-token';
+const CSRF_TOKEN_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
+
+// Methods that require CSRF protection (state-changing operations)
+const CSRF_PROTECTED_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+// Routes exempt from CSRF protection (public endpoints)
+// These should match the full request path (req.originalUrl)
+const CSRF_EXEMPT_ROUTES = [
+    '/api/v1/auth/login',
+    '/api/v1/auth/signup',
+    '/api/v1/auth/forgot-password',
+    '/api/v1/auth/reset-password', // Has its own token-based security
+    '/api/v1/auth/refresh-token',
+    '/api/v1/auth/verify-email',
+    '/api/v1/contact',
+    '/health',
+    '/api/v1/health'
+];
+
+// =============================================================================
+// REFRESH TOKEN ROTATION & CHAIN TRACKING CONFIGURATION
+// =============================================================================
+
+// Token family tracking for detecting token reuse attacks
+// When a refresh token is used, we create a new "family" chain
+// If an old token from the same family is reused, it indicates a potential attack
+const REFRESH_TOKEN_FAMILY_PREFIX = 'auth:token_family:';
+const REFRESH_TOKEN_USED_PREFIX = 'auth:refresh_used:';
+
+/**
+ * Generate a unique token family ID for refresh token chains
+ * @returns {string} Unique family ID
+ */
+const generateTokenFamilyId = () => {
+    return crypto.randomBytes(16).toString('hex');
+};
+
+/**
+ * Store token family information for chain tracking
+ * @param {string} familyId - Token family ID
+ * @param {string} userId - User ID
+ * @param {number} expirySeconds - Expiry time in seconds
+ */
+const storeTokenFamily = async (familyId, userId, expirySeconds = 172800) => {
+    try {
+        await cache.set(`${REFRESH_TOKEN_FAMILY_PREFIX}${familyId}`, {
+            userId,
+            createdAt: Date.now(),
+            isValid: true
+        }, expirySeconds);
+    } catch (error) {
+        logger.error('[Auth Middleware] Error storing token family:', error);
+    }
+};
+
+/**
+ * Mark a refresh token as used (for rotation tracking)
+ * @param {string} tokenHash - Hash of the refresh token
+ * @param {string} familyId - Token family ID
+ * @param {number} expirySeconds - Expiry time in seconds
+ */
+const markRefreshTokenUsed = async (tokenHash, familyId, expirySeconds = 172800) => {
+    try {
+        await cache.set(`${REFRESH_TOKEN_USED_PREFIX}${tokenHash}`, {
+            familyId,
+            usedAt: Date.now()
+        }, expirySeconds);
+    } catch (error) {
+        logger.error('[Auth Middleware] Error marking refresh token as used:', error);
+    }
+};
+
+/**
+ * Check if a refresh token has been used before (potential reuse attack)
+ * @param {string} tokenHash - Hash of the refresh token
+ * @returns {Promise<Object|null>} Token usage info if used, null if fresh
+ */
+const checkRefreshTokenReuse = async (tokenHash) => {
+    try {
+        return await cache.get(`${REFRESH_TOKEN_USED_PREFIX}${tokenHash}`);
+    } catch (error) {
+        logger.error('[Auth Middleware] Error checking refresh token reuse:', error);
+        return null;
+    }
+};
+
+/**
+ * Invalidate an entire token family (used when reuse is detected)
+ * This forces all tokens in the family to be invalid
+ * @param {string} familyId - Token family ID
+ */
+const invalidateTokenFamily = async (familyId) => {
+    try {
+        const familyKey = `${REFRESH_TOKEN_FAMILY_PREFIX}${familyId}`;
+        const familyData = await cache.get(familyKey);
+        
+        if (familyData) {
+            // Mark family as invalid
+            await cache.set(familyKey, {
+                ...familyData,
+                isValid: false,
+                invalidatedAt: Date.now()
+            }, 172800); // Keep for 2 days for audit
+            
+            logger.warn('[Auth Middleware] Token family invalidated due to potential reuse attack', {
+                familyId,
+                userId: familyData.userId
+            });
+        }
+    } catch (error) {
+        logger.error('[Auth Middleware] Error invalidating token family:', error);
+    }
+};
+
+/**
+ * Check if a token family is still valid
+ * @param {string} familyId - Token family ID
+ * @returns {Promise<boolean>} True if family is valid
+ */
+const isTokenFamilyValid = async (familyId) => {
+    try {
+        const familyData = await cache.get(`${REFRESH_TOKEN_FAMILY_PREFIX}${familyId}`);
+        return familyData?.isValid === true;
+    } catch (error) {
+        logger.error('[Auth Middleware] Error checking token family validity:', error);
+        return true; // Fail-open for availability
+    }
+};
+
+/**
+ * Hash a token for storage (don't store raw tokens)
+ * @param {string} token - Raw token
+ * @returns {string} Hashed token
+ */
+const hashToken = (token) => {
+    return crypto.createHash('sha256').update(token).digest('hex');
+};
 
 /**
  * Helper function to normalize user roles
@@ -406,6 +552,183 @@ export {
     checkPermission,
     optionalAuth,
     authenticateWebSocket,
+    // CSRF Protection exports
+    csrfProtection,
+    attachCsrfToken,
+    validateCsrfToken,
+    getCsrfToken,
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    // Refresh Token Rotation exports
+    generateTokenFamilyId,
+    storeTokenFamily,
+    markRefreshTokenUsed,
+    checkRefreshTokenReuse,
+    invalidateTokenFamily,
+    isTokenFamilyValid,
+    hashToken,
     ROLES,
     RIGHTS
+};
+
+// =============================================================================
+// CSRF PROTECTION MIDDLEWARE
+// =============================================================================
+
+/**
+ * Generate a cryptographically secure CSRF token
+ * @returns {string} Random hex string
+ */
+const generateCsrfToken = () => {
+    return crypto.randomBytes(CSRF_TOKEN_LENGTH).toString('hex');
+};
+
+/**
+ * Set CSRF token cookie
+ * @param {Object} res - Express response object
+ * @param {string} token - CSRF token
+ */
+const setCsrfCookie = (res, token) => {
+    // For cross-origin requests (web on different port than server),
+    // we need sameSite: 'none' with secure: true.
+    // Chrome 80+ requires secure: true for sameSite: 'none' even on localhost.
+    res.cookie(CSRF_COOKIE_NAME, token, {
+        httpOnly: false, // Must be readable by JavaScript to include in header
+        secure: true, // Required for sameSite: 'none' in all modern browsers
+        sameSite: 'none', // Required for cross-origin requests
+        maxAge: CSRF_TOKEN_EXPIRY,
+        path: '/'
+    });
+};
+
+/**
+ * Middleware to generate and attach CSRF token to response
+ */
+const attachCsrfToken = (req, res, next) => {
+    const existingToken = req.cookies?.[CSRF_COOKIE_NAME];
+    
+    if (!existingToken) {
+        const newToken = generateCsrfToken();
+        setCsrfCookie(res, newToken);
+        req.csrfToken = newToken;
+        
+        logger.verbose('[CSRF] New CSRF token generated', {
+            ip: req.ip,
+            path: req.path
+        });
+    } else {
+        req.csrfToken = existingToken;
+    }
+    
+    next();
+};
+
+/**
+ * Timing-safe string comparison to prevent timing attacks
+ * @param {string} a - First string
+ * @param {string} b - Second string
+ * @returns {boolean} True if strings are equal
+ */
+const timingSafeEqual = (a, b) => {
+    if (typeof a !== 'string' || typeof b !== 'string') {
+        return false;
+    }
+    
+    if (a.length !== b.length) {
+        return false;
+    }
+    
+    try {
+        const bufferA = Buffer.from(a, 'utf8');
+        const bufferB = Buffer.from(b, 'utf8');
+        return crypto.timingSafeEqual(bufferA, bufferB);
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * Middleware to validate CSRF token on state-changing requests
+ */
+const validateCsrfToken = (req, res, next) => {
+    // Skip for non-protected methods
+    if (!CSRF_PROTECTED_METHODS.includes(req.method)) {
+        return next();
+    }
+    
+    // Skip for exempt routes - use originalUrl to get the full path including mount prefix
+    const path = req.originalUrl || req.path;
+    if (CSRF_EXEMPT_ROUTES.some(exemptRoute => path.startsWith(exemptRoute))) {
+        return next();
+    }
+    
+    const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+    const headerToken = req.get(CSRF_HEADER_NAME);
+    
+    if (!cookieToken) {
+        logger.warn('[CSRF] Missing CSRF cookie token', {
+            ip: req.ip,
+            path: req.path,
+            method: req.method
+        });
+        return res.status(403).json({
+            success: false,
+            message: 'CSRF token missing. Please refresh the page and try again.'
+        });
+    }
+    
+    if (!headerToken) {
+        logger.warn('[CSRF] Missing CSRF header token', {
+            ip: req.ip,
+            path: req.path,
+            method: req.method
+        });
+        return res.status(403).json({
+            success: false,
+            message: 'CSRF token header missing. Please include X-CSRF-Token header.'
+        });
+    }
+    
+    if (!timingSafeEqual(cookieToken, headerToken)) {
+        logger.warn('[CSRF] CSRF token mismatch', {
+            ip: req.ip,
+            path: req.path,
+            method: req.method
+        });
+        return res.status(403).json({
+            success: false,
+            message: 'CSRF token validation failed. Please refresh the page and try again.'
+        });
+    }
+    
+    logger.verbose('[CSRF] CSRF token validated successfully', {
+        ip: req.ip,
+        path: req.path,
+        method: req.method
+    });
+    
+    next();
+};
+
+/**
+ * Combined CSRF middleware - attaches and validates in one step
+ */
+const csrfProtection = (req, res, next) => {
+    attachCsrfToken(req, res, () => {
+        validateCsrfToken(req, res, next);
+    });
+};
+
+/**
+ * Endpoint handler to get a fresh CSRF token
+ */
+const getCsrfToken = (req, res) => {
+    const token = generateCsrfToken();
+    setCsrfCookie(res, token);
+    
+    res.status(200).json({
+        success: true,
+        message: 'CSRF token generated',
+        csrfToken: token
+    });
 };

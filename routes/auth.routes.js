@@ -28,6 +28,7 @@ router.validRoutes = [
     '/api/v1/auth/forgot-password',
     '/api/v1/auth/reset-password/:token',
     '/api/v1/auth/socket-token',
+    '/api/v1/auth/csrf-token',  // CSRF token endpoint
     // Two-Factor Authentication
     '/api/v1/auth/2fa/setup',
     '/api/v1/auth/2fa/verify-setup',
@@ -43,6 +44,11 @@ router.validRoutes = [
     '/api/v1/auth/roles/request-elevation',
     '/api/v1/auth/roles/pending-requests'
 ];
+
+// =============================================================================
+// CSRF Token Endpoint - Get a fresh CSRF token
+// =============================================================================
+router.get('/csrf-token', authMiddleware.getCsrfToken);
 
 router.post('/signup',
     validateRequest(authSchemas.signup),

@@ -112,7 +112,13 @@ const userSchema = new mongoose.Schema({
         }, isActive: {
             type: Boolean, default: true
         }
-    }]
+    }],
+    // Password history for preventing password reuse (stores hashed passwords)
+    passwordHistory: {
+        type: [String],
+        select: false,
+        default: []
+    }
 }, {
     toJSON: {virtuals: false}, toObject: {virtuals: false}
 });
@@ -154,6 +160,46 @@ userSchema.methods.createEmailVerificationToken = function () {
     this.emailVerificationToken = crypto.createHash('sha256').update(verificationToken).digest('hex');
     this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // Token valid for 24 hours
     return verificationToken;
+};
+
+/**
+ * Check if a password was previously used (for password reuse prevention)
+ * @param {string} candidatePassword - The plaintext password to check
+ * @returns {Promise<boolean>} - True if password was previously used
+ */
+userSchema.methods.isPasswordPreviouslyUsed = async function (candidatePassword) {
+    if (!this.passwordHistory || this.passwordHistory.length === 0) {
+        return false;
+    }
+    
+    // Check against each stored password hash
+    for (const oldHash of this.passwordHistory) {
+        const isMatch = await bcrypt.compare(candidatePassword, oldHash);
+        if (isMatch) {
+            return true;
+        }
+    }
+    return false;
+};
+
+/**
+ * Add current password to history before changing password
+ * Keeps only the last 5 passwords
+ * @param {string} hashedPassword - The hashed password to add to history
+ */
+userSchema.methods.addPasswordToHistory = function (hashedPassword) {
+    if (!this.passwordHistory) {
+        this.passwordHistory = [];
+    }
+    
+    // Add current password to history
+    this.passwordHistory.push(hashedPassword);
+    
+    // Keep only the last 5 passwords
+    const MAX_PASSWORD_HISTORY = 5;
+    if (this.passwordHistory.length > MAX_PASSWORD_HISTORY) {
+        this.passwordHistory = this.passwordHistory.slice(-MAX_PASSWORD_HISTORY);
+    }
 };
 
 // Check if model exists to prevent recompilation errors in tests

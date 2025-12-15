@@ -170,6 +170,18 @@ class Server {
         // Setup basic health check route - unprotected and without API prefix
         // Health endpoints should NEVER use caching
         this.app.get('/health', noCacheResponse(), appController.getHealth);
+        
+        // Import auth middleware for CSRF protection
+        const authMiddlewareModule = await import('./middleware/auth.middleware.js');
+        const { csrfProtection, attachCsrfToken } = authMiddlewareModule;
+        
+        // Apply CSRF token attachment to all API routes (sets cookie if missing)
+        this.app.use('/api', attachCsrfToken);
+        
+        // Apply CSRF validation to state-changing requests on protected routes
+        // Note: Exempt routes are handled within the middleware itself
+        this.app.use('/api', csrfProtection);
+        
         // Import route modules (lazy load to avoid circular dependencies)
         const [
             authRoutesModule,

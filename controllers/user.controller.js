@@ -642,7 +642,7 @@ const userController = {
             ip: req.ip
         });
 
-        const user = await User.findById(req.params.id).select('+password');
+        const user = await User.findById(req.params.id).select('+password +passwordHistory');
         if (!user) {
             logger.warn(`User not found for password change: ${req.params.id}`);
             return res.status(404).json({
@@ -698,6 +698,28 @@ const userController = {
             }
         }
 
+        // Check if the new password was previously used (last 5 passwords)
+        const wasPasswordUsed = await user.isPasswordPreviouslyUsed(newPassword);
+        if (wasPasswordUsed) {
+            logger.warn('Password change: Password was previously used', {userId: req.params.id});
+            return res.status(400).json({
+                success: false,
+                message: 'This password was recently used. Please choose a different password.',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        // Check if new password is the same as current password
+        const isSameAsCurrent = await bcrypt.compare(newPassword, user.password);
+        if (isSameAsCurrent) {
+            logger.warn('Password change: New password same as current', {userId: req.params.id});
+            return res.status(400).json({
+                success: false,
+                message: 'New password cannot be the same as your current password.',
+                timestamp: new Date().toISOString()
+            });
+        }
+
         // For admin password resets, log the action for security audit
         if (!isOwnPassword && isAdmin) {
             logger.info(`${logger.safeColor(logger.colors.cyan)}[User Controller]${logger.safeColor(logger.colors.reset)} Admin password reset performed`, {
@@ -708,6 +730,9 @@ const userController = {
                 ip: req.ip
             });
         }
+
+        // Add current password to history before changing
+        user.addPasswordToHistory(user.password);
 
         // Update password (newPassword is already hashed by middleware)
         user.password = req.body.password; // Use the hashed password from middleware

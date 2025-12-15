@@ -21,6 +21,15 @@ import {
     sendEmail,
     getEmailTransporter
 } from './app.controller.js';
+import {
+    generateTokenFamilyId,
+    storeTokenFamily,
+    markRefreshTokenUsed,
+    checkRefreshTokenReuse,
+    invalidateTokenFamily,
+    isTokenFamilyValid,
+    hashToken
+} from '../middleware/auth.middleware.js';
 
 /**
  * Helper function to normalize user roles
@@ -31,11 +40,15 @@ import {
 /**
  * Generate access and refresh tokens for a user
  * @param {Object} user - User object
- * @returns {Object} - Access and refresh tokens
+ * @param {string} familyId - Token family ID for chain tracking (optional, generates new if not provided)
+ * @returns {Object} - Access and refresh tokens with family ID
  */
-const generateTokens = (user) => {
+const generateTokens = (user, familyId = null) => {
     // Create a unique nonce to ensure tokens are always different
     const nonce = crypto.randomBytes(8).toString('hex');
+    
+    // Generate or use existing token family ID for chain tracking
+    const tokenFamilyId = familyId || generateTokenFamilyId();
 
     // Create a user data object with all necessary properties
     const userData = {
@@ -50,9 +63,18 @@ const generateTokens = (user) => {
 
     const accessToken = jwt.sign(userData, process.env.ACCESS_TOKEN_SECRET, {expiresIn: process.env.ACCESS_TOKEN_EXPIRY});
 
-    const refreshToken = jwt.sign({id: user.id, nonce: nonce}, // Add nonce to refresh token too
-        process.env.REFRESH_TOKEN_SECRET, {expiresIn: process.env.REFRESH_TOKEN_EXPIRY});
-    return {accessToken, refreshToken};
+    // Include family ID in refresh token for chain tracking
+    const refreshToken = jwt.sign(
+        {
+            id: user.id, 
+            nonce: nonce,
+            familyId: tokenFamilyId // Add family ID for rotation tracking
+        },
+        process.env.REFRESH_TOKEN_SECRET, 
+        {expiresIn: process.env.REFRESH_TOKEN_EXPIRY}
+    );
+    
+    return {accessToken, refreshToken, familyId: tokenFamilyId};
 };
 
 /**
@@ -84,29 +106,34 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     const accessTokenMaxAge = parseExpiry(accessTokenExpiry);
     const refreshTokenMaxAge = parseExpiry(refreshTokenExpiry);
     
+    // Cross-origin cookie settings:
+    // - sameSite: 'none' is required for cross-origin requests (web app on different domain/port)
+    // - secure: true is REQUIRED for sameSite: 'none' in ALL browsers (including localhost)
+    // - Chrome 80+ rejects sameSite: 'none' without secure: true
+    const cookieOptions = {
+        httpOnly: true,
+        secure: true, // Required for sameSite: 'none' - works on localhost with modern browsers
+        sameSite: 'none', // Required for cross-origin (web app on different origin than API)
+        path: '/'
+    };
+    
     // Set access token cookie
     res.cookie('accessToken', accessToken, {
-        httpOnly: true,
-        secure: isProduction, // HTTPS only in production
-        sameSite: isProduction ? 'none' : 'lax', // Cross-site in production
-        maxAge: accessTokenMaxAge,
-        path: '/'
+        ...cookieOptions,
+        maxAge: accessTokenMaxAge
     });
     
     // Set refresh token cookie
     res.cookie('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: isProduction, // HTTPS only in production
-        sameSite: isProduction ? 'none' : 'lax', // Cross-site in production
-        maxAge: refreshTokenMaxAge,
-        path: '/'
+        ...cookieOptions,
+        maxAge: refreshTokenMaxAge
     });
     
     logger.verbose('[Auth Controller] Tokens set as httpOnly cookies:', {
         accessTokenMaxAge: Math.floor(accessTokenMaxAge / 1000 / 60) + 'm',
         refreshTokenMaxAge: Math.floor(refreshTokenMaxAge / 1000 / 60 / 60 / 24) + 'd',
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax'
+        secure: true,
+        sameSite: 'none'
     });
 };
 
@@ -115,21 +142,15 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
  * @param {Object} res - Express response object
  */
 const clearTokenCookies = (res) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    
-    res.clearCookie('accessToken', {
+    const cookieOptions = {
         httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
+        secure: true, // Must match how cookies were set
+        sameSite: 'none',
         path: '/'
-    });
+    };
     
-    res.clearCookie('refreshToken', {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
-        path: '/'
-    });
+    res.clearCookie('accessToken', cookieOptions);
+    res.clearCookie('refreshToken', cookieOptions);
     
     logger.verbose('[Auth Controller] Authentication cookies cleared');
 };
@@ -247,6 +268,31 @@ const sendSecurityAlertEmail = async (user, alertData, transporter = null) => {
 };
 
 /**
+ * Send new device login notification email to user
+ * @param {Object} user - User object
+ * @param {Object} deviceInfo - Device information
+ * @param {Object} [transporter] - Email transporter (passed from server)
+ */
+const sendNewDeviceLoginEmail = async (user, deviceInfo, transporter = null) => {
+    return sendEmail({
+        to: user.email, 
+        subject: 'New Device Login to Your Account', 
+        template: 'security-alert', 
+        data: {
+            firstName: user.firstName || user.name || 'User',
+            email: user.email,
+            loginTime: new Date().toLocaleString(),
+            ipAddress: deviceInfo.ipAddress || 'Unknown',
+            location: deviceInfo.location ? `${deviceInfo.location.city || ''}, ${deviceInfo.location.country || ''}`.trim() : null,
+            device: deviceInfo.platform || 'Unknown',
+            browser: deviceInfo.browser ? `${deviceInfo.browser} on ${deviceInfo.os || 'Unknown OS'}` : null,
+            appUrl: process.env.APP_URL,
+            appName: process.env.APP_NAME || 'App Base'
+        }
+    }, transporter);
+};
+
+/**
  * Auth Controller
  * Handles authentication-related operations with Redis caching
  */
@@ -359,8 +405,12 @@ const authController = {
                 });
             }
 
-            // Generate tokens for the newly created user
+            // Generate tokens for the newly created user (new token family)
             const tokens = generateTokens(user);
+            
+            // Store the new token family for chain tracking
+            await storeTokenFamily(tokens.familyId, user.id);
+            
             await cacheUserSession(user.id, tokens.accessToken); // Cache the user session
             await cacheUserProfile(user); // Cache the user profile
 
@@ -507,8 +557,11 @@ const authController = {
                 logger.info('2FA verification successful', {userId: user.id});
             }
 
-            // Generate tokens
+            // Generate tokens (new token family for fresh login)
             const tokens = generateTokens(user);
+            
+            // Store the new token family for chain tracking
+            await storeTokenFamily(tokens.familyId, user.id);
 
             await cacheUserSession(user.id, tokens.accessToken); // Cache the user session
             await cacheUserProfile(user); // Cache the user profile
@@ -533,22 +586,12 @@ const authController = {
                 // Send security alert email if this is a new device (but not during signup)
                 if (isNewDevice) {
                     try {
-                        await sendSecurityAlertEmail(user, {
-                            deviceInfo: {
-                                browser: deviceInfo.browser,
-                                os: deviceInfo.os,
-                                platform: deviceInfo.platform,
-                                ipAddress: deviceInfo.ipAddress,
-                                timestamp: new Date().toISOString()
-                            },
-                            loginTime: new Date().toISOString(),
-                            ipAddress: deviceInfo.ipAddress
-                        });
-                        logger.verbose('[Auth Controller - Login] Security alert email sent for new device:', {
+                        await sendNewDeviceLoginEmail(user, deviceInfo, getEmailTransporter());
+                        logger.info('[Auth Controller - Login] New device login email sent:', {
                             userId: user.id, deviceId: deviceInfo.deviceId, email: user.email
                         });
                     } catch (emailError) {
-                        logger.warn('[Auth Controller - Login] Failed to send security alert email:', {
+                        logger.warn('[Auth Controller - Login] Failed to send new device login email:', {
                             message: emailError.message, userId: user.id, email: user.email
                         });
                         // Don't fail login if email fails
@@ -619,7 +662,36 @@ const authController = {
                 });
             }
 
+            // Hash the token for storage lookups (never store raw tokens)
+            const tokenHash = hashToken(refreshToken);
+
             logger.verbose('[Auth Controller - Refresh Token] Verifying token:', {tokenLength: refreshToken?.length});
+
+            // =================================================================
+            // REFRESH TOKEN ROTATION: Check for token reuse attack
+            // =================================================================
+            const tokenUsageInfo = await checkRefreshTokenReuse(tokenHash);
+            if (tokenUsageInfo) {
+                // This token has been used before - likely a stale cookie after logout/refresh
+                // This is normal behavior, not necessarily a security attack
+                logger.info(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Refresh token already used (stale cookie)`, {
+                    ip: req.ip,
+                    familyId: tokenUsageInfo.familyId
+                });
+                
+                // Invalidate the token family (fast, Redis only)
+                if (tokenUsageInfo.familyId) {
+                    await invalidateTokenFamily(tokenUsageInfo.familyId);
+                }
+                
+                // Clear cookies to force re-authentication
+                clearTokenCookies(res);
+                
+                return res.status(401).json({
+                    success: false,
+                    message: 'Session expired. Please log in again.'
+                });
+            }
 
             // Verify the refresh token
             let decoded;
@@ -627,7 +699,8 @@ const authController = {
                 decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
                 logger.verbose('[Auth Controller - Refresh Token] Token decoded successfully:', {
                     userId: decoded.id,
-                    nonce: decoded.nonce
+                    nonce: decoded.nonce,
+                    familyId: decoded.familyId
                 });
             } catch (err) {
                 logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Invalid refresh token:`, {
@@ -641,6 +714,29 @@ const authController = {
                 return res.status(403).json({
                     success: false, message: 'Invalid refresh token'
                 });
+            }
+
+            // =================================================================
+            // REFRESH TOKEN ROTATION: Validate token family
+            // =================================================================
+            const familyId = decoded.familyId;
+            if (familyId) {
+                const isFamilyValid = await isTokenFamilyValid(familyId);
+                if (!isFamilyValid) {
+                    logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Token family has been invalidated`, {
+                        userId: decoded.id,
+                        familyId,
+                        ip: req.ip
+                    });
+                    
+                    // Clear cookies to force re-authentication
+                    clearTokenCookies(res);
+                    
+                    return res.status(401).json({
+                        success: false,
+                        message: 'Session invalidated. Please log in again.'
+                    });
+                }
             }
 
             // Get updated user data for the new token
@@ -662,8 +758,22 @@ const authController = {
                 });
             }
 
-            // Generate new tokens with current user data
-            const tokens = generateTokens(user);
+            // =================================================================
+            // REFRESH TOKEN ROTATION: Mark old token as used BEFORE generating new one
+            // =================================================================
+            await markRefreshTokenUsed(tokenHash, familyId || 'legacy');
+            
+            // Blacklist the old refresh token to prevent reuse
+            const oldTokenDecoded = jwt.decode(refreshToken);
+            if (oldTokenDecoded && oldTokenDecoded.exp) {
+                const remainingTtl = oldTokenDecoded.exp - Math.floor(Date.now() / 1000);
+                if (remainingTtl > 0) {
+                    await cache.set(`auth:blacklist:${refreshToken}`, true, remainingTtl);
+                }
+            }
+
+            // Generate new tokens with the SAME family ID (rotation within family)
+            const tokens = generateTokens(user, familyId);
             await cacheUserSession(user.id, tokens.accessToken); // Cache the new session
 
             // Track user device for token refresh
@@ -686,7 +796,10 @@ const authController = {
             }
             await cacheUserProfile(user); // Cache the user profile
 
-            logger.info(`${logger.safeColor(logger.colors.green)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Token refreshed successfully`, {userId: user.id});
+            logger.info(`${logger.safeColor(logger.colors.green)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Token refreshed successfully (rotation applied)`, {
+                userId: user.id,
+                familyId: tokens.familyId
+            });
             logger.verbose('[Auth Controller - Refresh Token] Success response being sent:', {
                 success: true,
                 message: 'Token refreshed successfully',
@@ -807,16 +920,43 @@ const authController = {
                 .update(token)
                 .digest('hex');
 
-            // Find user with valid reset token and not expired
+            // Find user with valid reset token and not expired (include password history)
             const user = await User.findOne({
                 passwordResetToken: hashedToken, passwordResetExpires: {$gt: Date.now()}
-            });
+            }).select('+password +passwordHistory');
             if (!user) {
                 logger.error(`${logger.safeColor(logger.colors.red)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Invalid or expired reset token`);
                 return res.status(400).json({
                     success: false, message: 'Password reset token is invalid or has expired'
                 });
             }
+
+            // Check if the new password was previously used (last 5 passwords)
+            const wasPasswordUsed = await user.isPasswordPreviouslyUsed(password);
+            if (wasPasswordUsed) {
+                logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Password reset: Password was previously used`, {
+                    userId: user.id
+                });
+                return res.status(400).json({
+                    success: false,
+                    message: 'This password was recently used. Please choose a different password.'
+                });
+            }
+
+            // Also check if new password matches current password
+            const isSameAsCurrent = await bcrypt.compare(password, user.password);
+            if (isSameAsCurrent) {
+                logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Controller]${logger.safeColor(logger.colors.reset)} Password reset: New password same as current`, {
+                    userId: user.id
+                });
+                return res.status(400).json({
+                    success: false,
+                    message: 'New password cannot be the same as your current password.'
+                });
+            }
+
+            // Add current password to history before changing
+            user.addPasswordToHistory(user.password);
 
             // Set new password and clear reset token fields
             user.password = await bcrypt.hash(password, 12);
@@ -828,8 +968,12 @@ const authController = {
             // Clear user profile cache after password reset
             await cache.invalidateUserCaches(user.id);
 
-            // Generate new tokens after password reset (optional)
+            // Generate new tokens after password reset (new token family for security)
             const tokens = generateTokens(user);
+            
+            // Store the new token family for chain tracking
+            await storeTokenFamily(tokens.familyId, user.id);
+            
             await cacheUserSession(user.id, tokens.accessToken); // Cache new session
             await cacheUserProfile(user); // Cache updated profile
             // Send password changed confirmation email

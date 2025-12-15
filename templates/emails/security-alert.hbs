@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Alert - New Login Detected</title>
+    <style>
+        /* Reset styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f4f4f4;
+        }
+
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .email-header {
+            background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%);
+            color: white;
+            padding: 30px 40px;
+            text-align: center;
+        }
+
+        .email-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .email-body {
+            padding: 40px;
+        }
+
+        .greeting {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+
+        .content {
+            font-size: 16px;
+            line-height: 1.8;
+            color: #444;
+            margin-bottom: 30px;
+        }
+
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin: 20px 0;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .button-container {
+            text-align: center;
+            margin: 30px 0;
+        }
+
+        .alert-info {
+            background-color: #f8d7da;
+            border-left: 4px solid #dc3545;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+            color: #721c24;
+        }
+
+        .login-details {
+            background-color: #f8f9fa;
+            border-left: 4px solid #6c757d;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .security-actions {
+            background-color: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+            color: #0c5460;
+        }
+
+        .footer {
+            background-color: #f8f9fa;
+            padding: 30px 40px;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .footer p {
+            font-size: 14px;
+            color: #6c757d;
+            margin: 5px 0;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        .divider {
+            height: 1px;
+            background-color: #e9ecef;
+            margin: 30px 0;
+        }
+
+        .alert-icon {
+            text-align: center;
+            font-size: 48px;
+            margin: 20px 0;
+            color: #dc3545;
+        }
+
+        /* Responsive design */
+        @media only screen and (max-width: 600px) {
+            .email-container {
+                width: 100% !important;
+                margin: 0 !important;
+            }
+
+            .email-header,
+            .email-body,
+            .footer {
+                padding: 20px !important;
+            }
+
+            .email-header h1 {
+                font-size: 24px !important;
+            }
+
+            .greeting {
+                font-size: 16px !important;
+            }
+
+            .content {
+                font-size: 14px !important;
+            }
+
+            .button {
+                display: block !important;
+                width: 100% !important;
+                padding: 15px !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="email-container">
+    <!-- Header -->
+    <div class="email-header">
+        <h1>{{appName}}</h1>
+    </div>
+
+    <!-- Body -->
+    <div class="email-body">
+        <div class="alert-icon">🔒</div>
+
+        <div class="greeting">
+            Hello {{firstName}}!
+        </div>
+
+        <div class="content">
+            <p>We detected a new login to your {{appName}} account associated with <strong>{{email}}</strong>.</p>
+        </div>
+
+        <div class="alert-info">
+            <h3 style="margin-bottom: 10px;">Security Alert</h3>
+            <p>A new login was detected on your account. If this was you, no action is needed.</p>
+            <p><strong>If this wasn't you, please secure your account immediately.</strong></p>
+        </div>
+
+        <div class="login-details">
+            <h3 style="margin-bottom: 15px; color: #495057;">Login Details</h3>
+            <table style="width: 100%; font-size: 14px;">
+                <tr>
+                    <td style="padding: 5px 0; font-weight: 600; width: 30%;">Time:</td>
+                    <td style="padding: 5px 0;">{{loginTime}}</td>
+                </tr>
+                {{#if ipAddress}}
+                    <tr>
+                        <td style="padding: 5px 0; font-weight: 600;">IP Address:</td>
+                        <td style="padding: 5px 0;">{{ipAddress}}</td>
+                    </tr>
+                {{/if}}
+                {{#if location}}
+                    <tr>
+                        <td style="padding: 5px 0; font-weight: 600;">Location:</td>
+                        <td style="padding: 5px 0;">{{location}}</td>
+                    </tr>
+                {{/if}}
+                {{#if device}}
+                    <tr>
+                        <td style="padding: 5px 0; font-weight: 600;">Device:</td>
+                        <td style="padding: 5px 0;">{{device}}</td>
+                    </tr>
+                {{/if}}
+                {{#if browser}}
+                    <tr>
+                        <td style="padding: 5px 0; font-weight: 600;">Browser:</td>
+                        <td style="padding: 5px 0;">{{browser}}</td>
+                    </tr>
+                {{/if}}
+            </table>
+        </div>
+
+        <div class="security-actions">
+            <h3 style="margin-bottom: 10px;">If This Wasn't You</h3>
+            <p>Please take the following steps immediately:</p>
+            <ul style="margin: 10px 0 10px 20px;">
+                <li><strong>Change your password</strong> right away</li>
+                <li>Review your account activity for any unauthorized changes</li>
+                <li>Check if any personal information has been modified</li>
+                <li>Consider enabling additional security features</li>
+                <li>Contact our support team if you need assistance</li>
+            </ul>
+        </div>
+
+        {{#if appUrl}}
+            <div class="button-container">
+                <a href="{{appUrl}}/auth/reset-password" class="button">Change Password</a>
+            </div>
+        {{/if}}
+
+        <div class="divider"></div>
+
+        <div class="content">
+            <p><strong>Security Tips:</strong></p>
+            <ul style="margin: 10px 0 10px 20px;">
+                <li>Always log out from shared or public devices</li>
+                <li>Use strong, unique passwords</li>
+                <li>Be cautious of phishing attempts</li>
+                <li>Keep your contact information updated</li>
+            </ul>
+        </div>
+
+        <div class="content">
+            <p>Thank you for helping us keep your account secure.</p>
+            <p>The {{appName}} Security Team</p>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <p>&copy; {{currentYear}} {{appName}}. All rights reserved.</p>
+        <p>This email was sent to <strong>{{email}}</strong></p>
+        {{#if appUrl}}
+            <p><a href="{{appUrl}}">Visit our website</a></p>
+        {{/if}}
+    </div>
+</div>
+</body>
+</html>

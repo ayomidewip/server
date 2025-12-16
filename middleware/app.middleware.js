@@ -502,24 +502,9 @@ const setupCors = (app) => {
     };    // Enable CORS before any routes
     app.use(cors(corsOptions));
 
-    // Add custom CORS error handler to catch rejected origins
-    app.use((req, res, next) => {
-        // Check if CORS has rejected this request (no Access-Control-Allow-Origin header)
-        if (!res.headersSent && !res.getHeader('Access-Control-Allow-Origin')) {
-            // This indicates CORS rejected the request
-            const origin = req.get('Origin') || 'no-origin';
-            logger.warn(`CORS: Sending rejection response for unauthorized origin: ${origin}`);
-
-            return res.status(403).json({
-                success: false,
-                message: `Origin '${origin}' not allowed by CORS policy`
-            });
-        }
-        next();
-    });
-
     // Keep emojis for startup logs as per requirements
     logger.info(`🌐 CORS configured for ${process.env.NODE_ENV} environment with ${allowedOrigins.length} allowed origins`);
+    logger.info(`📱 Mobile app requests (no-origin) are allowed`);
 };
 
 /**

@@ -665,6 +665,13 @@ const validateCsrfToken = (req, res, next) => {
     const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
     const headerToken = req.get(CSRF_HEADER_NAME);
     
+    // If no auth cookie exists, skip CSRF validation - let auth middleware handle it
+    // CSRF is only relevant for authenticated requests
+    const authCookie = req.cookies?.accessToken;
+    if (!authCookie) {
+        return next();
+    }
+    
     if (!cookieToken) {
         logger.warn('[CSRF] Missing CSRF cookie token', {
             ip: req.ip,

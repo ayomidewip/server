@@ -106,14 +106,14 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     const accessTokenMaxAge = parseExpiry(accessTokenExpiry);
     const refreshTokenMaxAge = parseExpiry(refreshTokenExpiry);
     
-    // Cross-origin cookie settings:
-    // - sameSite: 'none' is required for cross-origin requests (web app on different domain/port)
-    // - secure: true is REQUIRED for sameSite: 'none' in ALL browsers (including localhost)
-    // - Chrome 80+ rejects sameSite: 'none' without secure: true
+    // Cookie settings for cross-origin scenarios:
+    // Development (HTTP): Use 'lax' for same-site, 'none' requires HTTPS
+    // Production (HTTPS): Use 'none' for cross-origin with secure flag
+    // Note: sameSite 'none' REQUIRES secure: true in all modern browsers
     const cookieOptions = {
         httpOnly: true,
-        secure: true, // Required for sameSite: 'none' - works on localhost with modern browsers
-        sameSite: 'none', // Required for cross-origin (web app on different origin than API)
+        secure: isProduction, // Only use secure in production (HTTPS)
+        sameSite: isProduction ? 'none' : 'lax', // 'none' requires HTTPS, use 'lax' for HTTP dev
         path: '/'
     };
     
@@ -132,8 +132,8 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     logger.verbose('[Auth Controller] Tokens set as httpOnly cookies:', {
         accessTokenMaxAge: Math.floor(accessTokenMaxAge / 1000 / 60) + 'm',
         refreshTokenMaxAge: Math.floor(refreshTokenMaxAge / 1000 / 60 / 60 / 24) + 'd',
-        secure: true,
-        sameSite: 'none'
+        secure: cookieOptions.secure,
+        sameSite: cookieOptions.sameSite
     });
 };
 
@@ -142,10 +142,11 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
  * @param {Object} res - Express response object
  */
 const clearTokenCookies = (res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
     const cookieOptions = {
         httpOnly: true,
-        secure: true, // Must match how cookies were set
-        sameSite: 'none',
+        secure: isProduction, // Must match how cookies were set
+        sameSite: isProduction ? 'none' : 'lax',
         path: '/'
     };
     

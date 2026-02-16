@@ -589,13 +589,14 @@ const generateCsrfToken = () => {
  * @param {string} token - CSRF token
  */
 const setCsrfCookie = (res, token) => {
-    // For cross-origin requests (web on different port than server),
-    // we need sameSite: 'none' with secure: true.
-    // Chrome 80+ requires secure: true for sameSite: 'none' even on localhost.
+    const isProduction = process.env.NODE_ENV === 'production';
+    // For cross-origin requests in production (HTTPS), use sameSite: 'none' with secure: true
+    // For development (HTTP), use sameSite: 'lax' with secure: false
+    // Note: sameSite 'none' REQUIRES secure: true in all modern browsers
     res.cookie(CSRF_COOKIE_NAME, token, {
         httpOnly: false, // Must be readable by JavaScript to include in header
-        secure: true, // Required for sameSite: 'none' in all modern browsers
-        sameSite: 'none', // Required for cross-origin requests
+        secure: isProduction, // Only use secure in production (HTTPS)
+        sameSite: isProduction ? 'none' : 'lax', // 'none' requires HTTPS, use 'lax' for HTTP dev
         maxAge: CSRF_TOKEN_EXPIRY,
         path: '/'
     });

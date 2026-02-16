@@ -4,6 +4,32 @@ import logger from '../utils/app.logger.js';
 import {storeInGridFS, retrieveFromGridFS, deleteFromGridFS} from '../config/db.js';
 
 /**
+ * Binary file extensions - single source of truth
+ * Used for file type classification throughout the application
+ */
+const BINARY_FILE_EXTENSIONS = [
+    // Images
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tiff',
+    // Audio
+    'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma',
+    // Video
+    'mp4', 'webm', 'avi', 'mov', 'wmv', 'flv', 'mkv', 'm4v',
+    // Documents
+    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    // Archives
+    'zip', 'rar', '7z', 'tar', 'gz', 'bz2',
+    // Executables
+    'exe', 'dll', 'bin', 'dmg', 'iso',
+    // Databases
+    'db', 'sqlite', 'mdb',
+    // Design
+    'psd', 'ai', 'indd', 'sketch', 'fig',
+    // 3D Models
+    'obj', 'gltf', 'glb', 'fbx', 'stl', 'dae', '3ds', 'blend',
+    'ply', '3mf', 'usdz', 'usda', 'usdc', 'vrm', 'vox', 'c4d'
+];
+
+/**
  * Hybrid File Schema for MongoDB storage
  * Separates text files (collaborative) from binary files (traditional storage)
  */
@@ -43,18 +69,9 @@ const fileSchema = new mongoose.Schema({
                 return 'directory';
             }
             
-            // For files, determine based on extension
+            // For files, determine based on extension using single source of truth
             const ext = this.fileName ? this.fileName.toLowerCase().split('.').pop() : '';
-            const binaryExtensions = [
-                'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico',
-                'mp3', 'wav', 'mp4', 'webm', 'avi', 'mov', 'wmv', 'flv',
-                'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', '7z',
-                'exe', 'dll', 'bin', 'dmg', 'iso', 'tar', 'gz', 'db',
-                'sqlite', 'mdb', 'psd', 'ai', 'indd'
-            ];
-            
-            // All text files are now collaborative
-            return binaryExtensions.includes(ext) ? 'binary' : 'text';
+            return BINARY_FILE_EXTENSIONS.includes(ext) ? 'binary' : 'text';
         }
     },
 
@@ -291,6 +308,11 @@ fileSchema.statics.validatePath = function(path) {
     return /^\/[^\0]*$/.test(path) && !path.includes('//') && (path === '/' || !path.endsWith('/'));
 };
 
+// Static method to get binary file extensions (single source of truth)
+fileSchema.statics.getBinaryExtensions = function() {
+    return BINARY_FILE_EXTENSIONS;
+};
+
 // Static method to get supported file types
 fileSchema.statics.getSupportedTypes = function() {
     return {
@@ -303,11 +325,7 @@ fileSchema.statics.getSupportedTypes = function() {
             description: 'Text files stored as Yjs collaborative documents'
         },
         binary: {
-            extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico',
-                        'mp3', 'wav', 'mp4', 'webm', 'avi', 'mov', 'wmv', 'flv',
-                        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', '7z',
-                        'exe', 'dll', 'bin', 'dmg', 'iso', 'tar', 'gz', 'db',
-                        'sqlite', 'mdb', 'psd', 'ai', 'indd'],
+            extensions: BINARY_FILE_EXTENSIONS,
             description: 'Binary files stored in GridFS with version snapshots'
         }
     };
@@ -423,16 +441,7 @@ fileSchema.statics.getFileType = function(fileName) {
     if (!fileName) return 'binary';
     
     const ext = fileName.toLowerCase().split('.').pop();
-    const binaryExtensions = [
-        'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico',
-        'mp3', 'wav', 'mp4', 'webm', 'avi', 'mov', 'wmv', 'flv',
-        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', '7z',
-        'exe', 'dll', 'bin', 'dmg', 'iso', 'tar', 'gz', 'db',
-        'sqlite', 'mdb', 'psd', 'ai', 'indd'
-    ];
-    
-    // Directories remain as 'directory', any text file becomes 'collaborative'
-    return binaryExtensions.includes(ext) ? 'binary' : 'text';
+    return BINARY_FILE_EXTENSIONS.includes(ext) ? 'binary' : 'text';
 };
 
 // Instance method to get current content (binary files only - text files use Yjs)

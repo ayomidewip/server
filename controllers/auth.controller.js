@@ -28,7 +28,9 @@ import {
     checkRefreshTokenReuse,
     invalidateTokenFamily,
     isTokenFamilyValid,
-    hashToken
+    hashToken,
+    parseExpiryToMs,
+    TOKEN_COOKIE_OPTIONS
 } from '../middleware/auth.middleware.js';
 
 /**
@@ -84,56 +86,17 @@ const generateTokens = (user, familyId = null) => {
  * @param {string} refreshToken - JWT refresh token
  */
 const setTokenCookies = (res, accessToken, refreshToken) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    
-    // Parse token expiry times
-    const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRY;
-    const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRY;
-    
-    // Convert expiry strings to milliseconds
-    const parseExpiry = (expiry) => {
-        const unit = expiry.slice(-1);
-        const value = parseInt(expiry.slice(0, -1));
-        
-        switch(unit) {
-            case 'm': return value * 60 * 1000; // minutes
-            case 'h': return value * 60 * 60 * 1000; // hours
-            case 'd': return value * 24 * 60 * 60 * 1000; // days
-            default: return value * 1000; // assume seconds
-        }
-    };
-    
-    const accessTokenMaxAge = parseExpiry(accessTokenExpiry);
-    const refreshTokenMaxAge = parseExpiry(refreshTokenExpiry);
-    
-    // Cookie settings for cross-origin scenarios:
-    // Development (HTTP): Use 'lax' for same-site, 'none' requires HTTPS
-    // Production (HTTPS): Use 'none' for cross-origin with secure flag
-    // Note: sameSite 'none' REQUIRES secure: true in all modern browsers
-    const cookieOptions = {
-        httpOnly: true,
-        secure: isProduction, // Only use secure in production (HTTPS)
-        sameSite: isProduction ? 'none' : 'lax', // 'none' requires HTTPS, use 'lax' for HTTP dev
-        path: '/'
-    };
-    
-    // Set access token cookie
-    res.cookie('accessToken', accessToken, {
-        ...cookieOptions,
-        maxAge: accessTokenMaxAge
-    });
-    
-    // Set refresh token cookie
-    res.cookie('refreshToken', refreshToken, {
-        ...cookieOptions,
-        maxAge: refreshTokenMaxAge
-    });
-    
+    const accessTokenMaxAge  = parseExpiryToMs(process.env.ACCESS_TOKEN_EXPIRY);
+    const refreshTokenMaxAge = parseExpiryToMs(process.env.REFRESH_TOKEN_EXPIRY);
+
+    res.cookie('accessToken',  accessToken,  { ...TOKEN_COOKIE_OPTIONS, maxAge: accessTokenMaxAge });
+    res.cookie('refreshToken', refreshToken, { ...TOKEN_COOKIE_OPTIONS, maxAge: refreshTokenMaxAge });
+
     logger.verbose('[Auth Controller] Tokens set as httpOnly cookies:', {
-        accessTokenMaxAge: Math.floor(accessTokenMaxAge / 1000 / 60) + 'm',
+        accessTokenMaxAge:  Math.floor(accessTokenMaxAge  / 1000 / 60)          + 'm',
         refreshTokenMaxAge: Math.floor(refreshTokenMaxAge / 1000 / 60 / 60 / 24) + 'd',
-        secure: cookieOptions.secure,
-        sameSite: cookieOptions.sameSite
+        secure:   TOKEN_COOKIE_OPTIONS.secure,
+        sameSite: TOKEN_COOKIE_OPTIONS.sameSite
     });
 };
 
@@ -142,17 +105,8 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
  * @param {Object} res - Express response object
  */
 const clearTokenCookies = (res) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    const cookieOptions = {
-        httpOnly: true,
-        secure: isProduction, // Must match how cookies were set
-        sameSite: isProduction ? 'none' : 'lax',
-        path: '/'
-    };
-    
-    res.clearCookie('accessToken', cookieOptions);
-    res.clearCookie('refreshToken', cookieOptions);
-    
+    res.clearCookie('accessToken',  TOKEN_COOKIE_OPTIONS);
+    res.clearCookie('refreshToken', TOKEN_COOKIE_OPTIONS);
     logger.verbose('[Auth Controller] Authentication cookies cleared');
 };
 
@@ -775,6 +729,8 @@ const authController = {
 
             // Generate new tokens with the SAME family ID (rotation within family)
             const tokens = generateTokens(user, familyId);
+            // Reset the family TTL so it never expires before the new refresh token cookie does.
+            await storeTokenFamily(tokens.familyId, user.id);
             await cacheUserSession(user.id, tokens.accessToken); // Cache the new session
 
             // Track user device for token refresh

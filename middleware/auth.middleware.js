@@ -46,6 +46,44 @@ const REFRESH_TOKEN_FAMILY_PREFIX = 'auth:token_family:';
 const REFRESH_TOKEN_USED_PREFIX = 'auth:refresh_used:';
 
 /**
+ * Parse a JWT expiry string (e.g. '20m', '1h', '7d') to seconds.
+ * Exported so auth.controller.js can reuse it for cookie maxAge calculations
+ * rather than maintaining a duplicate inline implementation.
+ * @param {string} str - Expiry string
+ * @returns {number} Expiry in seconds
+ */
+const parseExpiryToSeconds = (str = '') => {
+    const unit = str.slice(-1);
+    const value = parseInt(str.slice(0, -1), 10);
+    if (isNaN(value)) return 0;
+    switch (unit) {
+        case 'm': return value * 60;
+        case 'h': return value * 60 * 60;
+        case 'd': return value * 24 * 60 * 60;
+        default:  return value;
+    }
+};
+
+const parseExpiryToMs = (str) => parseExpiryToSeconds(str) * 1000;
+
+/**
+ * Shared cookie options for all httpOnly auth token cookies.
+ * base.eccco.space and api.eccco.space share the same eTLD+1 (eccco.space),
+ * making them same-site. sameSite:'lax' is therefore correct in production
+ * and more secure than 'none', which is only needed for cross-site contexts
+ * (different eTLD+1, e.g. app.foo.com → api.bar.com).
+ */
+const TOKEN_COOKIE_OPTIONS = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/'
+};
+
+// Token lifetimes from env – single source of truth for TTL defaults below.
+const REFRESH_TOKEN_EXPIRY_S = parseExpiryToSeconds(process.env.REFRESH_TOKEN_EXPIRY || '7d');
+
+/**
  * Generate a unique token family ID for refresh token chains
  * @returns {string} Unique family ID
  */
@@ -59,7 +97,7 @@ const generateTokenFamilyId = () => {
  * @param {string} userId - User ID
  * @param {number} expirySeconds - Expiry time in seconds
  */
-const storeTokenFamily = async (familyId, userId, expirySeconds = 172800) => {
+const storeTokenFamily = async (familyId, userId, expirySeconds = REFRESH_TOKEN_EXPIRY_S) => {
     try {
         await cache.set(`${REFRESH_TOKEN_FAMILY_PREFIX}${familyId}`, {
             userId,
@@ -77,7 +115,7 @@ const storeTokenFamily = async (familyId, userId, expirySeconds = 172800) => {
  * @param {string} familyId - Token family ID
  * @param {number} expirySeconds - Expiry time in seconds
  */
-const markRefreshTokenUsed = async (tokenHash, familyId, expirySeconds = 172800) => {
+const markRefreshTokenUsed = async (tokenHash, familyId, expirySeconds = REFRESH_TOKEN_EXPIRY_S) => {
     try {
         await cache.set(`${REFRESH_TOKEN_USED_PREFIX}${tokenHash}`, {
             familyId,
@@ -138,7 +176,10 @@ const invalidateTokenFamily = async (familyId) => {
 const isTokenFamilyValid = async (familyId) => {
     try {
         const familyData = await cache.get(`${REFRESH_TOKEN_FAMILY_PREFIX}${familyId}`);
-        return familyData?.isValid === true;
+        // null means the key is missing (never stored or TTL expired) – not explicitly revoked.
+        // Only a record with isValid: false (written by invalidateTokenFamily) should deny.
+        if (familyData === null) return true;
+        return familyData.isValid !== false;
     } catch (error) {
         logger.error('[Auth Middleware] Error checking token family validity:', error);
         return true; // Fail-open for availability
@@ -567,6 +608,9 @@ export {
     invalidateTokenFamily,
     isTokenFamilyValid,
     hashToken,
+    // Token config utilities – import these instead of re-implementing
+    parseExpiryToMs,
+    TOKEN_COOKIE_OPTIONS,
     ROLES,
     RIGHTS
 };
@@ -589,16 +633,10 @@ const generateCsrfToken = () => {
  * @param {string} token - CSRF token
  */
 const setCsrfCookie = (res, token) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    // For cross-origin requests in production (HTTPS), use sameSite: 'none' with secure: true
-    // For development (HTTP), use sameSite: 'lax' with secure: false
-    // Note: sameSite 'none' REQUIRES secure: true in all modern browsers
     res.cookie(CSRF_COOKIE_NAME, token, {
+        ...TOKEN_COOKIE_OPTIONS,
         httpOnly: false, // Must be readable by JavaScript to include in header
-        secure: isProduction, // Only use secure in production (HTTPS)
-        sameSite: isProduction ? 'none' : 'lax', // 'none' requires HTTPS, use 'lax' for HTTP dev
-        maxAge: CSRF_TOKEN_EXPIRY,
-        path: '/'
+        maxAge: CSRF_TOKEN_EXPIRY
     });
 };
 

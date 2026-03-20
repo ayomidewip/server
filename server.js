@@ -188,13 +188,17 @@ class Server {
             userRoutesModule,
             appRoutesModule,
             fileRoutesModule,
-            cacheRoutesModule
+            cacheRoutesModule,
+            groupRoutesModule,
+            commentRoutesModule
         ] = await Promise.all([
             import('./routes/auth.routes.js'),
             import('./routes/user.routes.js'),
             import('./routes/app.routes.js'),
             import('./routes/file.routes.js'),
-            import('./routes/cache.routes.js')
+            import('./routes/cache.routes.js'),
+            import('./routes/group.routes.js'),
+            import('./routes/comment.routes.js')
         ]);
 
         const authRouter = authRoutesModule.default ?? authRoutesModule.router ?? authRoutesModule;
@@ -202,12 +206,16 @@ class Server {
         const appRouter = appRoutesModule.default ?? appRoutesModule.router ?? appRoutesModule;
         const fileRouter = fileRoutesModule.default ?? fileRoutesModule.router ?? fileRoutesModule;
         const cacheRouter = cacheRoutesModule.default ?? cacheRoutesModule.router ?? cacheRoutesModule;
+        const groupRouter = groupRoutesModule.default ?? groupRoutesModule.router ?? groupRoutesModule;
+        const commentRouter = commentRoutesModule.default ?? commentRoutesModule.router ?? commentRoutesModule;
 
         const authValidRoutes = authRoutesModule.validRoutes ?? authRouter.validRoutes ?? [];
         const userValidRoutes = userRoutesModule.validRoutes ?? userRouter.validRoutes ?? [];
         const appValidRoutes = appRoutesModule.validRoutes ?? appRouter.validRoutes ?? [];
         const fileValidRoutes = fileRoutesModule.validRoutes ?? fileRouter.validRoutes ?? [];
         const cacheValidRoutes = cacheRoutesModule.validRoutes ?? cacheRouter.validRoutes ?? [];
+        const groupValidRoutes = groupRoutesModule.validRoutes ?? groupRouter.validRoutes ?? [];
+        const commentValidRoutes = commentRoutesModule.validRoutes ?? commentRouter.validRoutes ?? [];
 
         appMiddleware.registerRoutes([
             '/health',
@@ -215,7 +223,9 @@ class Server {
             ...authValidRoutes,
             ...userValidRoutes,
             ...fileValidRoutes,
-            ...cacheValidRoutes
+            ...cacheValidRoutes,
+            ...groupValidRoutes,
+            ...commentValidRoutes
         ]);
 
         // Apply route validation middleware specifically to /api routes
@@ -226,6 +236,8 @@ class Server {
         this.app.use('/api/v1/users', userRouter);
         this.app.use('/api/v1/files', fileRouter);
         this.app.use('/api/v1/cache', cacheRouter);
+        this.app.use('/api/v1/groups', groupRouter);
+        this.app.use('/api/v1/comments', commentRouter);
         this.app.use('/api/v1', appRouter);
 
         // Handle undefined routes

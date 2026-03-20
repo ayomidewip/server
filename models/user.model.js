@@ -205,4 +205,38 @@ userSchema.methods.addPasswordToHistory = function (hashedPassword) {
 // Check if model exists to prevent recompilation errors in tests
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
+// =========================================================================
+// FOLLOW SCHEMA (closely tied to users)
+// =========================================================================
+
+const followSchema = new mongoose.Schema({
+    follower: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+    },
+    following: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+    }
+}, {
+    timestamps: true
+});
+
+followSchema.index({follower: 1, following: 1}, {unique: true});
+followSchema.index({following: 1, follower: 1});
+
+followSchema.pre('validate', function (next) {
+    if (this.follower.equals(this.following)) {
+        return next(new Error('Users cannot follow themselves'));
+    }
+    next();
+});
+
+const Follow = mongoose.models.Follow || mongoose.model('Follow', followSchema);
+
 export default User;
+export {Follow};

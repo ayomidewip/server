@@ -2116,12 +2116,14 @@ const parseFilters = (query) => {
 
     // URL pattern filters
     if (query.url) {
-        filters.url = {$regex: query.url, $options: 'i'};
+        const escapedUrl = query.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filters.url = {$regex: escapedUrl, $options: 'i'};
     }
 
     // Generic text search
     if (query.search) {
-        const searchRegex = {$regex: query.search, $options: 'i'};
+        const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchRegex = {$regex: escapedSearch, $options: 'i'};
         filters.$or = [
             {url: searchRegex},
             {stack: searchRegex},
@@ -2134,6 +2136,8 @@ const parseFilters = (query) => {
     Object.keys(query).forEach(key => {
         if (key.startsWith('filter_')) {
             const fieldName = key.replace('filter_', '');
+            // Prevent NoSQL injection via $-prefixed operators
+            if (fieldName.startsWith('$')) return;
             const value = query[key];
 
             // Handle different data types

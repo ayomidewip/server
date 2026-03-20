@@ -708,10 +708,11 @@ const fileController = {
         if (type) filter.type = type;
         if (parentPath) filter.parentPath = parentPath;
         if (search) {
+            const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             filter.$or = [
-                { fileName: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-                { tags: { $in: [new RegExp(search, 'i')] } }
+                { fileName: { $regex: escaped, $options: 'i' } },
+                { description: { $regex: escaped, $options: 'i' } },
+                { tags: { $in: [new RegExp(escaped, 'i')] } }
             ];
         }
 

@@ -1,8 +1,10 @@
 import {Joi, password} from '../utils/validator.js';
 import {ROLES} from '../config/rights.js';
+import {GROUP_ROLES} from './group.model.js';
 
 // Get all valid roles as an array for validation
 const VALID_ROLES = Object.values(ROLES);
+const VALID_GROUP_ROLES = Object.values(GROUP_ROLES);
 
 /**
  * Standardize and validate schema for requests received
@@ -714,3 +716,115 @@ authSchemas.login = Joi.object({
             'string.base': '2FA token must be a string'
         })
 });
+
+// =============================================================================
+// GROUP SCHEMAS
+// =============================================================================
+
+export const groupSchemas = {
+    createGroup: Joi.object({
+        name: Joi.string().min(2).max(100).required()
+            .messages({
+                'string.min': 'Group name must be at least 2 characters',
+                'string.max': 'Group name cannot exceed 100 characters',
+                'any.required': 'Group name is required'
+            }),
+        description: Joi.string().max(500).allow('')
+            .messages({
+                'string.max': 'Description cannot exceed 500 characters'
+            }),
+        privacy: Joi.string().valid('public', 'private').default('private')
+            .messages({
+                'any.only': 'Privacy must be either "public" or "private"'
+            })
+    }),
+
+    updateGroup: Joi.object({
+        name: Joi.string().min(2).max(100),
+        description: Joi.string().max(500).allow(''),
+        privacy: Joi.string().valid('public', 'private'),
+        avatar: Joi.string().allow(null, '')
+    }).min(1),
+
+    addMember: Joi.object({
+        userId: Joi.objectId().required()
+            .messages({
+                'objectId.invalid': 'User ID must be a valid MongoDB ObjectID',
+                'any.required': 'User ID is required'
+            }),
+        role: Joi.string().valid(...VALID_GROUP_ROLES).default('MEMBER')
+            .messages({
+                'any.only': `Role must be one of: ${VALID_GROUP_ROLES.join(', ')}`
+            })
+    }),
+
+    updateMemberRole: Joi.object({
+        role: Joi.string().valid(...VALID_GROUP_ROLES).required()
+            .messages({
+                'any.only': `Role must be one of: ${VALID_GROUP_ROLES.join(', ')}`,
+                'any.required': 'Role is required'
+            })
+    }),
+
+    transferOwnership: Joi.object({
+        userId: Joi.objectId().required()
+            .messages({
+                'objectId.invalid': 'User ID must be a valid MongoDB ObjectID',
+                'any.required': 'User ID is required'
+            })
+    }),
+
+    shareFile: Joi.object({
+        fileId: Joi.objectId().required()
+            .messages({
+                'objectId.invalid': 'File ID must be a valid MongoDB ObjectID',
+                'any.required': 'File ID is required'
+            }),
+        caption: Joi.string().max(1000).allow('')
+            .messages({
+                'string.max': 'Caption cannot exceed 1000 characters'
+            })
+    }),
+
+    updateGroupFile: Joi.object({
+        caption: Joi.string().max(1000).allow(''),
+        pinned: Joi.boolean()
+    }).min(1)
+};
+
+// =============================================================================
+// COMMENT SCHEMAS
+// =============================================================================
+
+export const commentSchemas = {
+    createComment: Joi.object({
+        fileId: Joi.objectId().required()
+            .messages({
+                'objectId.invalid': 'File ID must be a valid MongoDB ObjectID',
+                'any.required': 'File ID is required'
+            }),
+        body: Joi.string().min(1).max(2000).required()
+            .messages({
+                'string.min': 'Comment cannot be empty',
+                'string.max': 'Comment cannot exceed 2000 characters',
+                'any.required': 'Comment body is required'
+            }),
+        parentComment: Joi.objectId().allow(null)
+            .messages({
+                'objectId.invalid': 'Parent comment ID must be a valid MongoDB ObjectID'
+            }),
+        groupId: Joi.objectId().allow(null)
+            .messages({
+                'objectId.invalid': 'Group ID must be a valid MongoDB ObjectID'
+            })
+    }),
+
+    updateComment: Joi.object({
+        body: Joi.string().min(1).max(2000).required()
+            .messages({
+                'string.min': 'Comment cannot be empty',
+                'string.max': 'Comment cannot exceed 2000 characters',
+                'any.required': 'Comment body is required'
+            })
+    })
+};

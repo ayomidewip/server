@@ -13,12 +13,18 @@ const router = Router();
 router.validRoutes = [
     '/api/v1/users',
     '/api/v1/users/public',
+    '/api/v1/users/mutuals',
     '/api/v1/users/stats/overview',
     '/api/v1/users/:id',
     '/api/v1/users/:id/password',
     '/api/v1/users/:id/files',
     '/api/v1/users/:id/stats',
-    '/api/v1/users/:id/stats/fields'
+    '/api/v1/users/:id/stats/fields',
+    '/api/v1/users/:id/follow',
+    '/api/v1/users/:id/following',
+    '/api/v1/users/:id/followers',
+    '/api/v1/users/:id/follow-counts',
+    '/api/v1/users/:id/follow-status'
 ];
 
 /**
@@ -38,6 +44,63 @@ router.get('/public',
 
 // Ensure all routes are authenticated first
 router.use(authMiddleware.verifyToken());
+
+// =========================================================================
+// FOLLOW ROUTES (nested under /users)
+// =========================================================================
+
+/**
+ * Get Mutuals:
+ * Route Definition: GET /api/v1/users/mutuals
+ * Permission: Authenticated
+ * Note: Must be before /:id routes to avoid param conflict
+ */
+router.get('/mutuals', userController.getMutuals);
+
+/**
+ * Follow a user:
+ * Route Definition: POST /api/v1/users/:id/follow
+ * Permission: Authenticated
+ */
+router.post('/:id/follow', userController.followUser);
+
+/**
+ * Unfollow a user:
+ * Route Definition: DELETE /api/v1/users/:id/follow
+ * Permission: Authenticated
+ */
+router.delete('/:id/follow', userController.unfollowUser);
+
+/**
+ * Get Following List:
+ * Route Definition: GET /api/v1/users/:id/following
+ * Permission: Authenticated
+ */
+router.get('/:id/following', userController.getFollowing);
+
+/**
+ * Get Followers List:
+ * Route Definition: GET /api/v1/users/:id/followers
+ * Permission: Authenticated
+ */
+router.get('/:id/followers', userController.getFollowers);
+
+/**
+ * Get Follow Counts:
+ * Route Definition: GET /api/v1/users/:id/follow-counts
+ * Permission: Authenticated
+ */
+router.get('/:id/follow-counts',
+    cacheResponse(60, (req) => `follows:counts:${req.params.id}`),
+    userController.getFollowCounts
+);
+
+/**
+ * Check Follow Status:
+ * Route Definition: GET /api/v1/users/:id/follow-status
+ * Permission: Authenticated
+ */
+router.get('/:id/follow-status', userController.getFollowStatus);
 
 // ADMIN-ONLY ROUTES (require MANAGE_ALL_USERS permission)
 

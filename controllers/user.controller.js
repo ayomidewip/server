@@ -1,4 +1,5 @@
 import User from '../models/user.model.js';
+import {Follow} from '../models/user.model.js';
 import File from '../models/file.model.js';
 import Log from '../models/log.model.js';
 import mongoose from 'mongoose';
@@ -1512,7 +1513,238 @@ const userController = {
         }
     }),
 
+    // =========================================================================
+    // FOLLOW ACTIONS
+    // =========================================================================
 
+    /**
+     * @desc    Follow a user
+     * @route   POST /api/v1/users/:id/follow
+     * @access  Authenticated
+     */
+    followUser: asyncHandler(async (req, res, next) => {
+        const followerId = req.user.id;
+        const followingId = req.params.id;
+
+        if (followerId === followingId) {
+            return next(new AppError('You cannot follow yourself', 400));
+        }
+
+        const targetUser = await User.findById(followingId).select('_id');
+        if (!targetUser) {
+            return next(new AppError('User not found', 404));
+        }
+
+        await Follow.findOneAndUpdate(
+            {follower: followerId, following: followingId},
+            {follower: followerId, following: followingId},
+            {upsert: true, new: true, setDefaultsOnInsert: true}
+        );
+
+        await Promise.all([
+            cache.del(`follows:followers:${followingId}`),
+            cache.del(`follows:following:${followerId}`),
+            cache.del(`follows:mutuals:${followerId}`),
+            cache.del(`follows:mutuals:${followingId}`),
+            cache.del(`follows:counts:${followerId}`),
+            cache.del(`follows:counts:${followingId}`)
+        ]);
+
+        logger.info(`[Follow] ${followerId} followed ${followingId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'User followed successfully'
+        });
+    }),
+
+    /**
+     * @desc    Unfollow a user
+     * @route   DELETE /api/v1/users/:id/follow
+     * @access  Authenticated
+     */
+    unfollowUser: asyncHandler(async (req, res, next) => {
+        const followerId = req.user.id;
+        const followingId = req.params.id;
+
+        const result = await Follow.findOneAndDelete({
+            follower: followerId,
+            following: followingId
+        });
+
+        if (!result) {
+            return next(new AppError('You are not following this user', 400));
+        }
+
+        await Promise.all([
+            cache.del(`follows:followers:${followingId}`),
+            cache.del(`follows:following:${followerId}`),
+            cache.del(`follows:mutuals:${followerId}`),
+            cache.del(`follows:mutuals:${followingId}`),
+            cache.del(`follows:counts:${followerId}`),
+            cache.del(`follows:counts:${followingId}`)
+        ]);
+
+        logger.info(`[Follow] ${followerId} unfollowed ${followingId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'User unfollowed successfully'
+        });
+    }),
+
+    /**
+     * @desc    Get users that the specified user is following
+     * @route   GET /api/v1/users/:id/following
+     * @access  Authenticated
+     */
+    getFollowing: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [follows, total] = await Promise.all([
+            Follow.find({follower: userId})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('following', 'firstName lastName username email profilePhoto'),
+            Follow.countDocuments({follower: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: follows.map(f => f.following),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get followers of a user
+     * @route   GET /api/v1/users/:id/followers
+     * @access  Authenticated
+     */
+    getFollowers: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [follows, total] = await Promise.all([
+            Follow.find({following: userId})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('follower', 'firstName lastName username email profilePhoto'),
+            Follow.countDocuments({following: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: follows.map(f => f.follower),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get mutual follows (users who follow each other)
+     * @route   GET /api/v1/users/mutuals
+     * @access  Authenticated
+     */
+    getMutuals: asyncHandler(async (req, res) => {
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const pipeline = [
+            {$match: {follower: userId}},
+            {
+                $lookup: {
+                    from: 'follows',
+                    let: {targetUser: '$following'},
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        {$eq: ['$follower', '$$targetUser']},
+                                        {$eq: ['$following', userId]}
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'reverse'
+                }
+            },
+            {$match: {'reverse.0': {$exists: true}}},
+            {
+                $facet: {
+                    data: [{$skip: skip}, {$limit: limit}],
+                    count: [{$count: 'total'}]
+                }
+            }
+        ];
+
+        const [result] = await Follow.aggregate(pipeline);
+        const mutualFollowDocs = result.data || [];
+        const total = result.count[0]?.total || 0;
+
+        const mutualUserIds = mutualFollowDocs.map(d => d.following);
+        const mutualUsers = await User.find({_id: {$in: mutualUserIds}})
+            .select('firstName lastName username email profilePhoto');
+
+        res.status(200).json({
+            success: true,
+            data: mutualUsers,
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get follow counts for a user
+     * @route   GET /api/v1/users/:id/follow-counts
+     * @access  Authenticated
+     */
+    getFollowCounts: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+
+        const [followingCount, followerCount] = await Promise.all([
+            Follow.countDocuments({follower: userId}),
+            Follow.countDocuments({following: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {followingCount, followerCount}
+        });
+    }),
+
+    /**
+     * @desc    Check if current user follows a specific user
+     * @route   GET /api/v1/users/:id/follow-status
+     * @access  Authenticated
+     */
+    getFollowStatus: asyncHandler(async (req, res) => {
+        const currentUserId = req.user.id;
+        const targetUserId = req.params.id;
+
+        const [isFollowing, isFollowedBy] = await Promise.all([
+            Follow.exists({follower: currentUserId, following: targetUserId}),
+            Follow.exists({follower: targetUserId, following: currentUserId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                isFollowing: !!isFollowing,
+                isFollowedBy: !!isFollowedBy,
+                isMutual: !!isFollowing && !!isFollowedBy
+            }
+        });
+    })
 };
 
 export {userController, formatUserResponse, formatPublicUserResponse};

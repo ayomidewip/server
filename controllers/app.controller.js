@@ -12,7 +12,6 @@ import {AppError} from '../middleware/error.middleware.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import {asyncHandler, redisClient as sharedRedisClient} from '../middleware/app.middleware.js';
-import {GridFSBucket} from 'mongodb';
 
 /**
  * Email templates cache
@@ -61,18 +60,6 @@ const getHealthStatus = async () => {
     // Prepare memory usage info
     const memoryInfo = process.memoryUsage();
 
-    // Check Yjs Redis pub/sub health
-    let yjsRedisHealth = { status: 'not_available' };
-    try {
-    const fileControllerModule = await import('./file.controller.js');
-    const fileController = fileControllerModule.default ?? fileControllerModule;
-        if (fileController.yjsService && fileController.yjsService.isInitialized) {
-            yjsRedisHealth = await fileController.yjsService.redisHealthCheck();
-        }
-    } catch (error) {
-        yjsRedisHealth = { status: 'error', message: error.message };
-    }
-
     const overallStatus = dbStatus === 'connected' ? 'ok' : 'error';
 
     return {
@@ -91,9 +78,6 @@ const getHealthStatus = async () => {
             status: dbStatus,
             latencyMs: parseFloat(dbLatency),
             connection: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-        },
-        collaborative: {
-            redis: yjsRedisHealth
         },
         responseTimeMs: parseFloat(responseTime)
     };
@@ -1683,205 +1667,6 @@ const sendTestEmail = asyncHandler(async (req, res, next) => {
     }
 });
 
-/**
- * GridFS bucket instance for app controller
- */
-let gridFSBucket = null;
-const bucketName = 'files';
-
-/**
- * Initialize GridFS bucket
- */
-const initializeGridFS = () => {
-    if (!gridFSBucket && mongoose.connection.db) {
-        gridFSBucket = new GridFSBucket(mongoose.connection.db, {
-            bucketName: bucketName
-        });
-        logger.info('GridFS initialized in app controller');
-    }
-    return gridFSBucket;
-};
-
-/**
- * Get comprehensive file storage statistics (GridFS + Regular files)
- * @returns {Promise<Object>} - Storage statistics with breakdown
- */
-const getGridFSStorageStats = async () => {
-    try {
-        initializeGridFS();
-
-        // Debug: List all collections to see what's available
-        const collections = await mongoose.connection.db.listCollections().toArray();
-        const collectionNames = collections.map(c => c.name);
-        logger.info('Available collections:', collectionNames);
-
-        let regularFilesStats = {totalFiles: 0, totalSize: 0, averageSize: 0};
-        let gridfsStats = {totalFiles: 0, totalSize: 0, averageSize: 0};
-
-        // First, check for regular file collection (non-GridFS)
-        if (collectionNames.includes('files')) {
-            logger.info('Found regular files collection, counting documents...');
-            try {
-                const fileModelModule = await import('../models/file.model.js');
-                const File = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
-
-                // Get detailed breakdown of regular files
-                const regularFiles = await File.aggregate([
-                    {
-                        $group: {
-                            _id: null,
-                            totalFiles: {$sum: 1},
-                            totalSize: {$sum: {$ifNull: ['$size', 0]}}, // Handle null sizes
-                            averageSize: {$avg: {$ifNull: ['$size', 0]}},
-                            gridfsFiles: {
-                                $sum: {
-                                    $cond: [
-                                        {$ne: ['$gridfsFileId', null]},
-                                        1,
-                                        0
-                                    ]
-                                }
-                            },
-                            inlineFiles: {
-                                $sum: {
-                                    $cond: [
-                                        {$eq: ['$storageType', 'inline']},
-                                        1,
-                                        0
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                ]);
-
-                if (regularFiles && regularFiles[0]) {
-                    regularFilesStats = regularFiles[0];
-                    logger.info(`Regular files stats:`, regularFilesStats);
-
-                    // Get additional file type breakdown
-                    const fileTypeBreakdown = await File.aggregate([
-                        {
-                            $group: {
-                                _id: '$type',
-                                count: {$sum: 1},
-                                totalSize: {$sum: {$ifNull: ['$size', 0]}}
-                            }
-                        },
-                        {$sort: {count: -1}}
-                    ]);
-
-                    regularFilesStats.fileTypes = fileTypeBreakdown;
-                    logger.info(`File type breakdown:`, fileTypeBreakdown);
-                }
-            } catch (error) {
-                logger.warn('Error counting regular files:', error.message);
-            }
-        }
-
-        // Then, try multiple possible GridFS collection names for additional files
-        const possibleGridFSCollections = ['fs.files', 'files.files', 'uploads.files'];
-
-        for (const collectionName of possibleGridFSCollections) {
-            if (collectionNames.includes(collectionName)) {
-                logger.info(`Found GridFS collection: ${collectionName}`);
-
-                try {
-                    const result = await mongoose.connection.db.collection(collectionName).aggregate([{
-                        $group: {
-                            _id: null,
-                            totalFiles: {$sum: 1},
-                            totalSize: {$sum: '$length'},
-                            averageSize: {$avg: '$length'}
-                        }
-                    }]).toArray();
-
-                    if (result && result[0] && result[0].totalFiles > 0) {
-                        gridfsStats = result[0];
-                        logger.info(`GridFS stats from ${collectionName}:`, gridfsStats);
-                        break; // Found GridFS files, no need to check other collections
-                    }
-                } catch (error) {
-                    logger.warn(`Error reading GridFS collection ${collectionName}:`, error.message);
-                }
-            }
-        }
-
-        // If no GridFS stats found with specific collections, try the default
-        if (gridfsStats.totalFiles === 0) {
-            logger.info(`Trying default GridFS collection: ${bucketName}.files`);
-            try {
-                const result = await mongoose.connection.db.collection(`${bucketName}.files`).aggregate([{
-                    $group: {
-                        _id: null,
-                        totalFiles: {$sum: 1},
-                        totalSize: {$sum: '$length'},
-                        averageSize: {$avg: '$length'}
-                    }
-                }]).toArray();
-
-                if (result && result[0]) {
-                    gridfsStats = result[0];
-                }
-            } catch (error) {
-                logger.warn(`Error reading default GridFS collection:`, error.message);
-            }
-        }
-
-        // Combine stats and create comprehensive breakdown
-        const combinedStats = {
-            // Total across all storage types
-            totalFiles: regularFilesStats.totalFiles + gridfsStats.totalFiles,
-            totalSize: regularFilesStats.totalSize + gridfsStats.totalSize,
-            averageSize: 0, // Will calculate below
-
-            // Breakdown by storage type
-            breakdown: {
-                regular: {
-                    totalFiles: regularFilesStats.totalFiles,
-                    totalSize: regularFilesStats.totalSize,
-                    averageSize: regularFilesStats.averageSize || 0,
-                    inlineFiles: regularFilesStats.inlineFiles || 0,
-                    gridfsLinkedFiles: regularFilesStats.gridfsFiles || 0,
-                    fileTypes: regularFilesStats.fileTypes || []
-                },
-                gridfs: {
-                    totalFiles: gridfsStats.totalFiles,
-                    totalSize: gridfsStats.totalSize,
-                    averageSize: gridfsStats.averageSize || 0
-                }
-            }
-        };
-
-        // Calculate combined average size
-        if (combinedStats.totalFiles > 0) {
-            combinedStats.averageSize = combinedStats.totalSize / combinedStats.totalFiles;
-        }
-
-        // Add human readable sizes
-        const addHumanSize = (stats) => {
-            if (stats.totalSize) {
-                const sizeInMB = stats.totalSize / (1024 * 1024);
-                stats.humanReadableSize = sizeInMB < 1 ?
-                    `${(stats.totalSize / 1024).toFixed(2)} KB` :
-                    `${sizeInMB.toFixed(2)} MB`;
-            } else {
-                stats.humanReadableSize = "0.00 MB";
-            }
-        };
-
-        addHumanSize(combinedStats);
-        addHumanSize(combinedStats.breakdown.regular);
-        addHumanSize(combinedStats.breakdown.gridfs);
-
-        logger.info('Final comprehensive file storage stats:', combinedStats);
-        return combinedStats;
-    } catch (error) {
-        logger.error('Error getting file storage stats:', {error: error.message});
-        throw error;
-    }
-};
-
 // Query Filter Functions - Universal filtering capabilities for all data models
 
 /**
@@ -2116,12 +1901,14 @@ const parseFilters = (query) => {
 
     // URL pattern filters
     if (query.url) {
-        filters.url = {$regex: query.url, $options: 'i'};
+        const escapedUrl = query.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filters.url = {$regex: escapedUrl, $options: 'i'};
     }
 
     // Generic text search
     if (query.search) {
-        const searchRegex = {$regex: query.search, $options: 'i'};
+        const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchRegex = {$regex: escapedSearch, $options: 'i'};
         filters.$or = [
             {url: searchRegex},
             {stack: searchRegex},
@@ -2134,6 +1921,8 @@ const parseFilters = (query) => {
     Object.keys(query).forEach(key => {
         if (key.startsWith('filter_')) {
             const fieldName = key.replace('filter_', '');
+            // Prevent NoSQL injection via $-prefixed operators
+            if (fieldName.startsWith('$')) return;
             const value = query[key];
 
             // Handle different data types
@@ -2352,9 +2141,7 @@ const getFilterSummary = (filters, options) => {
 const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
     try {
     const userModelModule = await import('../models/user.model.js');
-    const fileModelModule = await import('../models/file.model.js');
     const User = userModelModule.default ?? userModelModule.User ?? userModelModule;
-    const File = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
 
         // Initialize stats object
         const stats = {
@@ -2401,15 +2188,6 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
         const totalUsers = await User.countDocuments();
         const activeUsers = await User.countDocuments({active: true});
         const adminUsers = await User.countDocuments({roles: {$in: ['ADMIN', 'OWNER']}});
-
-        // Get file statistics
-        const totalFiles = await File.countDocuments();
-        const recentFiles = await File.countDocuments({
-            createdAt: {$gte: timeframeStart}
-        });
-
-        // Get file storage stats
-        const fileStorageStats = await getGridFSStorageStats();
 
         // Get log statistics for the time period
         const logStats = await Log.aggregate([
@@ -2482,8 +2260,6 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
             totalUsers,
             activeUsers,
             adminUsers,
-            totalFiles,
-            recentFiles,
             totalRequests: logStats[0]?.totalRequests || 0,
             errorRate: logStats[0] ? Math.round((logStats[0].errors / logStats[0].totalRequests) * 100) : 0,
             uniqueVisitors: logStats[0]?.uniqueIPs?.length || 0
@@ -2505,7 +2281,7 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
         stats.services = {
             database: {
                 status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-                collections: ['users', 'files', 'logs']
+                collections: ['users', 'logs']
             },
             cache: {
                 status: cacheStatus,
@@ -2515,11 +2291,6 @@ const getApplicationOverviewStats = asyncHandler(async (req, res, next) => {
             email: {
                 status: emailReady ? 'configured' : 'not configured',
                 host: process.env.EMAIL_HOST
-            },
-            storage: {
-                totalFiles: fileStorageStats.totalFiles || 0,
-                totalSize: fileStorageStats.totalSize || 0,
-                humanReadableSize: fileStorageStats.humanReadableSize || '0.00 MB'
             }
         };
 
@@ -2760,19 +2531,9 @@ export {
     initializeEmailService,
     isEmailReady,
     getEmailTransporter,
-    initializeGridFS,
-    getGridFSStorageStats,
     parseFilters,
     applyFilters,
     applySmartPagination,
     applyFiltersToAggregation,
     getFilterSummary
-};
-
-/**
- * Export GridFS utility functions for use in other parts of the app
- */
-export const gridFSUtils = {
-    initializeGridFS,
-    getGridFSStorageStats
 };

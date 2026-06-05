@@ -270,10 +270,6 @@ const createHttpLogger = () => {
                         entityType = 'user';
                         const userMatch = url.match(/\/api\/v1\/users\/([^\/]+)/);
                         entityId = userMatch ? userMatch[1] : null;
-                    } else if (url.includes('/api/v1/files/')) {
-                        entityType = 'file';
-                        const fileMatch = url.match(/\/api\/v1\/files\/([^\/]+)/);
-                        entityId = fileMatch ? fileMatch[1] : null;
                     } else if (url.includes('/api/v1/auth/')) {
                         entityType = 'auth';
                         entityId = req.user ? req.user.id : null;

@@ -3,7 +3,7 @@ import userController from '../controllers/user.controller.js';
 import * as userMiddleware from '../middleware/user.middleware.js';
 import * as authMiddleware from '../middleware/auth.middleware.js';
 import {validateRequest} from '../middleware/validation.middleware.js';
-import {userSchemas, fileSchemas, statsSchemas} from '../models/schemas.js';
+import {userSchemas, statsSchemas} from '../models/schemas.js';
 import {RIGHTS} from '../config/rights.js';
 import {cacheResponse, clearCache, autoInvalidateCache} from '../middleware/cache.middleware.js';
 
@@ -17,7 +17,6 @@ router.validRoutes = [
     '/api/v1/users/stats/overview',
     '/api/v1/users/:id',
     '/api/v1/users/:id/password',
-    '/api/v1/users/:id/files',
     '/api/v1/users/:id/stats',
     '/api/v1/users/:id/stats/fields',
     '/api/v1/users/:id/follow',
@@ -207,22 +206,6 @@ router.put('/:id/password',
     userMiddleware.hashPassword,
     clearCache((req) => [`user:profile:${req.params.id}`]),
     userController.changePassword
-);
-
-/**
- * Get User Files
- * Route definition:
- * Permissions: Unrestricted => super admin, admin; Restricted => Logged-in User (own files only)
- */
-router.get('/:id/files',
-    userMiddleware.checkUserExists,
-    userMiddleware.checkResourceOwnership,
-    validateRequest(fileSchemas.getFiles, 'query'),
-    cacheResponse(300, (req) => {
-        const params = req.query ? new URLSearchParams(req.query).toString() : '';
-        return `user:files:${req.params.id}:${params ? Buffer.from(params).toString('base64') : 'all'}`;
-    }), // Cache for 5 minutes
-    userController.getUserFiles
 );
 
 /**

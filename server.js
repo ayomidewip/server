@@ -8,17 +8,9 @@ import path from 'node:path';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import http from 'node:http';
-import WebSocket from 'ws';
-import * as Y from 'yjs';
-import {setupWSConnection, setPersistence, docs} from '@y/websocket-server/utils';
 
 // Load environment variables FIRST before importing other local modules
 dotenv.config({path: path.resolve(process.cwd(), '.env')});
-
-const encodingModule = await import('lib0/encoding');
-const encoding = encodingModule.default ?? encodingModule;
-const syncProtocolModule = await import('y-protocols/sync');
-const syncProtocol = syncProtocolModule.default ?? syncProtocolModule;
 
 const loggerModule = await import('./utils/app.logger.js');
 const logger = loggerModule.default ?? loggerModule.logger ?? loggerModule;
@@ -37,10 +29,6 @@ const {noCacheResponse} = cacheMiddleware;
 
 const cacheControllerModule = await import('./controllers/cache.controller.js');
 const {cleanupService} = cacheControllerModule;
-
-const fileMiddleware = await import('./middleware/file.middleware.js');
-const {getFileNotificationService, getYjsService} = fileMiddleware;
-const notificationService = getFileNotificationService();
 
 const {redisClient} = appMiddleware;
 
@@ -170,43 +158,39 @@ class Server {
         // Setup basic health check route - unprotected and without API prefix
         // Health endpoints should NEVER use caching
         this.app.get('/health', noCacheResponse(), appController.getHealth);
-        
+
         // Import auth middleware for CSRF protection
         const authMiddlewareModule = await import('./middleware/auth.middleware.js');
         const { csrfProtection, attachCsrfToken } = authMiddlewareModule;
-        
+
         // Apply CSRF token attachment to all API routes (sets cookie if missing)
         this.app.use('/api', attachCsrfToken);
-        
+
         // Apply CSRF validation to state-changing requests on protected routes
         // Note: Exempt routes are handled within the middleware itself
         this.app.use('/api', csrfProtection);
-        
+
         // Import route modules (lazy load to avoid circular dependencies)
         const [
             authRoutesModule,
             userRoutesModule,
             appRoutesModule,
-            fileRoutesModule,
             cacheRoutesModule
         ] = await Promise.all([
             import('./routes/auth.routes.js'),
             import('./routes/user.routes.js'),
             import('./routes/app.routes.js'),
-            import('./routes/file.routes.js'),
             import('./routes/cache.routes.js')
         ]);
 
         const authRouter = authRoutesModule.default ?? authRoutesModule.router ?? authRoutesModule;
         const userRouter = userRoutesModule.default ?? userRoutesModule.router ?? userRoutesModule;
         const appRouter = appRoutesModule.default ?? appRoutesModule.router ?? appRoutesModule;
-        const fileRouter = fileRoutesModule.default ?? fileRoutesModule.router ?? fileRoutesModule;
         const cacheRouter = cacheRoutesModule.default ?? cacheRoutesModule.router ?? cacheRoutesModule;
 
         const authValidRoutes = authRoutesModule.validRoutes ?? authRouter.validRoutes ?? [];
         const userValidRoutes = userRoutesModule.validRoutes ?? userRouter.validRoutes ?? [];
         const appValidRoutes = appRoutesModule.validRoutes ?? appRouter.validRoutes ?? [];
-        const fileValidRoutes = fileRoutesModule.validRoutes ?? fileRouter.validRoutes ?? [];
         const cacheValidRoutes = cacheRoutesModule.validRoutes ?? cacheRouter.validRoutes ?? [];
 
         appMiddleware.registerRoutes([
@@ -214,7 +198,6 @@ class Server {
             ...appValidRoutes,
             ...authValidRoutes,
             ...userValidRoutes,
-            ...fileValidRoutes,
             ...cacheValidRoutes
         ]);
 
@@ -224,7 +207,6 @@ class Server {
         // API Routes
         this.app.use('/api/v1/auth', authRouter);
         this.app.use('/api/v1/users', userRouter);
-        this.app.use('/api/v1/files', fileRouter);
         this.app.use('/api/v1/cache', cacheRouter);
         this.app.use('/api/v1', appRouter);
 
@@ -245,11 +227,6 @@ class Server {
     async connectDatabase() {
         try {
             this.dbConnection = await connectDB();
-            
-            // Initialize Yjs service after database connection
-            const yjsService = getYjsService();
-            await yjsService.initialize();
-            
             return this.dbConnection;
         } catch (error) {
             logger.error('Failed to connect to database:', error);
@@ -284,7 +261,7 @@ class Server {
     /**
      * Initialize email service
      * @returns {Promise<void>}
-     */  
+     */
     async initializeEmailService() {
         try {
             const {initializeEmailService} = appController;
@@ -330,9 +307,6 @@ class Server {
     }
 
     /**
-     * Register process handlers for graceful shutdown
-     */
-    /**
      * Start the server
      * @param {number} port - Port to listen on (overrides environment variable)
      * @returns {Promise<Object>} Express server instance
@@ -367,328 +341,6 @@ class Server {
                         logger.info('🧹 Cache cleanup service disabled via configuration');
                     }
 
-                    // Yjs service initialized - collaborative editing ready
-
-                    
-
-                    // Setup integrated Yjs WebSocket server on the same HTTP server
-                    try {
-                        logger.info('🚀 Setting up integrated Yjs WebSocket server');
-                        
-                        const fileControllerModule = await import('./controllers/file.controller.js');
-                        const authMiddleware = await import('./middleware/auth.middleware.js');
-                        const fileModelModule = await import('./models/file.model.js');
-                        const FileModel = fileModelModule.default ?? fileModelModule.File ?? fileModelModule;
-                        const yjsService = fileControllerModule.yjsService ?? fileControllerModule.getYjsService?.();
-
-                        // Create WebSocket server using the existing HTTP server - standard Yjs pattern
-                        // Handle both /yjs/ and /notifications paths appropriately
-                        const wss = new WebSocket.Server({
-                            server: this.httpServer
-                        });
-
-                        const persistence = yjsService?.getPersistence?.();
-
-                        if (persistence) {
-                            setPersistence({
-                                provider: persistence,
-                                bindState: async (docName, ydoc) => {
-                                    try {
-                                        // Load persisted state from MongoDB
-                                        const persistedYdoc = await persistence.getYDoc(docName);
-                                        const persistedUpdate = Y.encodeStateAsUpdate(persistedYdoc);
-
-                                        // Apply persisted state to ensure consistency (idempotent)
-                                        if (persistedUpdate.length > 0) {
-                                            Y.applyUpdate(ydoc, persistedUpdate);
-                                        }
-                                        
-                                        // Store any local changes back to persistence
-                                        const currentState = Y.encodeStateAsUpdate(ydoc);
-                                        const persistedStateVector = Y.encodeStateVector(persistedYdoc);
-                                        const diff = Y.encodeStateAsUpdate(ydoc, persistedStateVector);
-                                        
-                                        if (diff.length > 2 && diff.some(value => value !== 0)) {
-                                            await persistence.storeUpdate(docName, diff);
-                                        }
-
-                                        // Setup MongoDB persistence for updates with optimized batching
-                                        let updateTimeout = null;
-                                        let persistenceTimeout = null;
-                                        const pendingUpdates = new Set();
-                                        const pendingPersistenceUpdates = new Map(); // docName -> updates array
-                                        
-                                        ydoc.on('update', async (update) => {
-                                            try {
-                                                // Batch persistence updates to reduce MongoDB writes
-                                                if (!pendingPersistenceUpdates.has(docName)) {
-                                                    pendingPersistenceUpdates.set(docName, []);
-                                                }
-                                                pendingPersistenceUpdates.get(docName).push(update);
-                                                
-                                                // Clear existing persistence timeout
-                                                if (persistenceTimeout) {
-                                                    clearTimeout(persistenceTimeout);
-                                                }
-                                                
-                                                // Batch persistence writes every 500ms for better performance
-                                                persistenceTimeout = setTimeout(async () => {
-                                                    for (const [docNameToPersist, updates] of pendingPersistenceUpdates) {
-                                                        try {
-                                                            // Store all batched updates
-                                                            for (const batchedUpdate of updates) {
-                                                                await persistence.storeUpdate(docNameToPersist, batchedUpdate);
-                                                            }
-
-                                                        } catch (batchError) {
-                                                            logger.error('Failed to store batched Yjs updates', {
-                                                                docName: docNameToPersist,
-                                                                updateCount: updates.length,
-                                                                error: batchError.message
-                                                            });
-                                                        }
-                                                    }
-                                                    pendingPersistenceUpdates.clear();
-                                                    persistenceTimeout = null;
-                                                    // Unregister cancel fn once it has fired naturally
-                                                    if (yjsService?.unregisterCancelFn) yjsService.unregisterCancelFn(docName);
-                                                }, 500); // 500ms batching for persistence
-                                                
-                                                // Debounce File model updates to avoid performance issues (longer delay)
-                                                pendingUpdates.add(docName);
-                                                
-                                                // Clear existing timeout
-                                                if (updateTimeout) {
-                                                    clearTimeout(updateTimeout);
-                                                }
-                                                
-                                                // Set new timeout to update file metadata after 3 seconds of inactivity
-                                                updateTimeout = setTimeout(async () => {
-                                                    for (const docNameToUpdate of pendingUpdates) {
-                                                        try {
-                                                            // Convert Yjs document name back to file path
-                                                            const filePath = docNameToUpdate.startsWith('yjs/') ? 
-                                                                '/' + docNameToUpdate.substring(4) : // Remove 'yjs/' prefix and add leading slash
-                                                                '/' + docNameToUpdate; // Add leading slash if no prefix
-                                                            
-                                                            // Update the file metadata to reflect the content change
-                                                            // Match both text files and binary files that use Yjs (e.g. DOCX)
-                                                            await FileModel.updateOne(
-                                                                { filePath: filePath, type: { $in: ['text', 'binary'] } },
-                                                                { updatedAt: new Date() }
-                                                            );
-                                                            
-                                                            logger.debug('Updated file metadata after Yjs content changes', {
-                                                                docName: docNameToUpdate,
-                                                                filePath
-                                                            });
-                                                        } catch (fileUpdateError) {
-                                                            logger.error('Failed to update file metadata', {
-                                                                docName: docNameToUpdate,
-                                                                error: fileUpdateError.message
-                                                            });
-                                                        }
-                                                    }
-                                                    pendingUpdates.clear();
-                                                    updateTimeout = null;
-                                                }, 3000); // 3 second debounce for metadata updates
-                                                
-                                            } catch (storeError) {
-                                                logger.error('Failed to handle Yjs update', {
-                                                    docName,
-                                                    error: storeError.message
-                                                });
-                                            }
-                                        });
-
-                                        // Register a cancel function so YjsService can abort the pending
-                                        // 500 ms persistence batch before clearing / re-seeding a document.
-                                        // Without this, stale updates would be written back to MongoDB
-                                        // AFTER clearDocument + storeUpdate(fresh) have already run.
-                                        if (yjsService?.registerCancelFn) {
-                                            yjsService.registerCancelFn(docName, () => {
-                                                if (persistenceTimeout) {
-                                                    clearTimeout(persistenceTimeout);
-                                                    persistenceTimeout = null;
-                                                }
-                                                pendingPersistenceUpdates.delete(docName);
-                                            });
-                                        }
-
-                                        // Bind Redis adapter for cross-server synchronization
-                                        try {
-                                            const redisAdapter = await yjsService?.bindRedisAdapter?.(docName, ydoc);
-                                            if (redisAdapter) {
-                                                logger.debug('Redis adapter bound for cross-server sync', { docName });
-                                            }
-                                        } catch (redisError) {
-                                            logger.warn('Failed to bind Redis adapter, continuing with MongoDB-only persistence', {
-                                                docName,
-                                                error: redisError.message
-                                            });
-                                        }
-
-                                        persistedYdoc.destroy();
-                                    } catch (error) {
-                                        logger.error('Failed to bind Yjs persistence state', {
-                                            docName,
-                                            error: error.message
-                                        });
-                                    }
-                                },
-                                writeState: async (docName, ydoc) => {
-                                    try {
-                                        // Flush to MongoDB
-                                        await persistence.flushDocument(docName);
-                                        
-                                        // Unbind Redis adapter when document is being written/closed
-                                        try {
-                                            await yjsService?.unbindRedisAdapter?.(docName, ydoc);
-                                        } catch (redisError) {
-                                            logger.warn('Failed to unbind Redis adapter during writeState', {
-                                                docName,
-                                                error: redisError.message
-                                            });
-                                        }
-                                    } catch (error) {
-                                        logger.error('Failed to flush Yjs persistence state', {
-                                            docName,
-                                            error: error.message
-                                        });
-                                    }
-                                }
-                            });
-
-                            const redisStats = yjsService?.getRedisStats?.() ?? {isEnabled: false, isConnected: false};
-                            if (redisStats.isEnabled && redisStats.isConnected) {
-                                logger.info('Yjs WebSocket persistence bound to MongoDB with Redis pub/sub scaling (multi-server mode)');
-                            } else {
-                                logger.info('Yjs WebSocket persistence bound to MongoDB provider (single-server mode)');
-                            }
-                        } else {
-                            logger.warn('Yjs WebSocket server started without persistence binding; collaborative changes will not be persisted.');
-                        }
-                        
-                        // Handle WebSocket connections with authentication
-                        wss.on('connection', async (ws, req) => {
-                            try {
-                                const urlPath = req.url.split('?')[0];
-                                
-                                if (urlPath === '/notifications') {
-                                    // This is a notification WebSocket connection - let the notification service handle it
-                                    notificationService.handleConnection(ws, req);
-                                    return;
-                                } else if (!urlPath.startsWith('/yjs/')) {
-                                    logger.warn('Invalid WebSocket path, rejecting connection', { urlPath });
-                                    ws.close(1008, 'Invalid path');
-                                    return;
-                                }
-                                
-                                // Continue with Yjs WebSocket handling
-
-                                if (!persistence) {
-                                    logger.error('Yjs persistence not initialized');
-                                    ws.close(1011, 'Persistence unavailable');
-                                    return;
-                                }
-
-                                // Authenticate WebSocket connection
-                                const user = await authMiddleware.authenticateWebSocket?.(ws, req);
-
-                                // Extract document name from URL.
-                                // CRITICAL: URL-decode the path so the docs-map key matches
-                                // the names produced by yjsService.getDocumentName().
-                                // Without this, filenames containing spaces or special chars
-                                // (e.g. "resume for AYODEJI (updated).docx") end up stored
-                                // under the percent-encoded key in the docs map, while
-                                // initializeTextContent / deleteDocument look up the
-                                // non-encoded key — causing stale-content mismatches.
-                                const docNameFromUrl = decodeURIComponent(
-                                    req.url.slice(1).split('?')[0]
-                                );
-                                
-                                // Call setupWSConnection which handles the Yjs sync protocol  
-                                // This will create or retrieve the Y.Doc from the docs cache
-                                // gc: false prevents aggressive garbage collection that might
-                                // cause documents to be prematurely removed from memory
-                                // Pass the decoded docName explicitly so every layer uses
-                                // the same un-encoded key (docs map, MongoDB, yjsService).
-                                setupWSConnection(ws, req, {
-                                    docName: docNameFromUrl,
-                                    gc: false  // Keep documents in memory for better collaboration
-                                });
-
-                                // CRITICAL FIX: Manually send full document state on every connection
-                                // The standard Yjs sync protocol can fail on reconnections, so we
-                                // explicitly send the document state to ensure clients always sync
-                                try {
-                                    const doc = docs.get(docNameFromUrl);
-                                    if (doc && ws.readyState === WebSocket.OPEN) {
-                                        const encoder = encoding.createEncoder();
-                                        encoding.writeVarUint(encoder, 0); // messageSync
-                                        const update = Y.encodeStateAsUpdate(doc);
-                                        syncProtocol.writeUpdate(encoder, update);
-                                        const message = encoding.toUint8Array(encoder);
-                                        
-                                        // Send the sync message
-                                        ws.send(message, (err) => {
-                                            if (err) {
-                                                logger.error('Failed to send manual sync message', {
-                                                    docName: docNameFromUrl,
-                                                    error: err.message
-                                                });
-                                            }
-                                        });
-                                    }
-                                } catch (syncError) {
-                                    logger.error('Failed to manually sync document', {
-                                        docName: docNameFromUrl,
-                                        error: syncError.message
-                                    });
-                                }
-
-                                logger.debug('Yjs WebSocket connection established', {
-                                    userId: user.id,
-                                    docName: docNameFromUrl
-                                });
-                                
-                            } catch (error) {
-                                logger.error('Yjs WebSocket authentication error:', error);
-                                ws.close(1008, 'Authentication failed');
-                            }
-                        });
-                        
-                        // Handle server errors
-                        wss.on('error', (error) => {
-                            logger.error('Integrated WebSocket server error:', error);
-                        });
-                        
-                        // Store WebSocket server reference for shutdown
-                        this.yjsWebSocketServer = wss;
-
-                        // Give YjsService a reference to the WS server's in-memory
-                        // docs Map so that deleteDocument / initializeTextContent can
-                        // evict stale documents and force a fresh bindState on reconnect.
-                        if (yjsService?.setWsDocsMap) {
-                            yjsService.setWsDocsMap(docs);
-                        }
-                        
-                        logger.info('✅ Integrated Yjs WebSocket server running on /yjs path');
-                        
-                    } catch (error) {
-                        logger.error('❌ Failed to start integrated Yjs WebSocket server:', error);
-                    }
-
-                    // Initialize notification WebSocket service (routing handled in main WebSocket server above)
-                    try {
-                        logger.info('🔔 Setting up notification WebSocket server');
-                        // Initialize the service without creating a separate WebSocket server
-                        notificationService.initialize();
-                        logger.info('✅ Notification WebSocket server running on /notifications path');
-                    } catch (error) {
-                        logger.error('❌ Failed to start notification WebSocket server:', error);
-                    }
-
                     // Log initial health check before showing startup banner
                     // Use the getHealth function from appController, but mock req/res
                     const mockReq = {ip: 'startup'};
@@ -710,7 +362,7 @@ class Server {
             throw error;
         }
     }
-    
+
 
 
     /**
@@ -739,15 +391,6 @@ class Server {
                         logger.info('Cache cleanup service stopped');
                     }
 
-                    // Cleanup Yjs service
-                    try {
-                        const fileControllerModule = await import('./controllers/file.controller.js');
-                        await fileControllerModule.yjsService?.destroy?.();
-                        logger.info('Yjs service cleaned up');
-                    } catch (error) {
-                        logger.warn('Failed to cleanup Yjs service:', error.message);
-                    }
-
                     // Close database connection
                     if (mongoose.connection.readyState !== 0) {
                         logger.info('Closing database connection...');
@@ -760,26 +403,6 @@ class Server {
                         logger.info('Closing Redis connection...');
                         await redisClient.quit();
                         logger.info('Redis connection closed');
-                    }
-                    
-                    // Close integrated Yjs WebSocket server if active
-                    if (this.yjsWebSocketServer) {
-                        logger.info('Closing integrated Yjs WebSocket server...');
-                        try {
-                            this.yjsWebSocketServer.close();
-                            logger.info('Integrated Yjs WebSocket server closed');
-                        } catch (err) {
-                            logger.warn('Error closing integrated Yjs WebSocket server:', err.message);
-                        }
-                        this.yjsWebSocketServer = null;
-                    }
-
-                    // Shutdown notification WebSocket service
-                    try {
-                        notificationService.shutdown();
-                        logger.info('Notification WebSocket service shut down');
-                    } catch (error) {
-                        logger.warn('Error shutting down notification WebSocket service:', error.message);
                     }
 
                     logger.info('Server stopped successfully');

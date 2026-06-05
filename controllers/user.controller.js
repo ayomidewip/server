@@ -1,5 +1,5 @@
 import User from '../models/user.model.js';
-import File from '../models/file.model.js';
+import {Follow} from '../models/user.model.js';
 import Log from '../models/log.model.js';
 import mongoose from 'mongoose';
 import {asyncHandler} from '../middleware/app.middleware.js';
@@ -766,129 +766,6 @@ const userController = {
         });
     }),
 
-    // Get user's files with filtering and pagination
-    getUserFiles: asyncHandler(async (req, res) => {
-        try {
-            const userId = req.params.id;
-            const currentUserId = req.user.id;
-            const currentUserRoles = req.user.roles || [];
-
-            // Check if user is requesting their own files or has admin privileges
-            const isOwnFiles = userId === currentUserId;
-            const isAdmin = hasRight(currentUserRoles, RIGHTS.MANAGE_ALL_USERS);
-
-            if (!isOwnFiles && !isAdmin) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Access denied. You can only view your own files unless you have admin privileges.'
-                });
-            }
-
-            // Parse filters and options using the universal filter system
-            const {filters, options} = parseFilters(req.query);
-
-            // Ensure we only get files for the specified user
-            filters.owner = new mongoose.Types.ObjectId(userId);
-
-            // Additional pipeline stages for file-specific aggregation
-            const additionalPipeline = [
-                // Get latest version of each file only
-                {$sort: {filePath: 1, owner: 1, version: -1}},
-                {
-                    $group: {
-                        _id: {filePath: '$filePath', owner: '$owner'},
-                        latestVersion: {$first: '$$ROOT'}
-                    }
-                },
-                {$replaceRoot: {newRoot: '$latestVersion'}}
-            ];
-
-            // Apply the filters using aggregation (for complex file operations)
-            const files = await applyFiltersToAggregation(File, filters, options, additionalPipeline);
-
-            // Get total count for pagination
-            const totalCountPipeline = [
-                {$match: filters},
-                {$sort: {filePath: 1, owner: 1, version: -1}},
-                {$group: {_id: {filePath: '$filePath', owner: '$owner'}}},
-                {$count: 'total'}
-            ];
-
-            const totalResult = await File.aggregate(totalCountPipeline);
-            const totalFiles = totalResult[0]?.total || 0;
-
-            // Populate owner information
-            await File.populate(files, {
-                path: 'owner lastModifiedBy',
-                select: 'firstName lastName username email'
-            });
-
-            // Get filter summary for response metadata
-            const filterSummary = getFilterSummary(filters, options);
-
-            logger.info(`Retrieved ${files.length} files for user ${userId}`, {
-                requesterId: req.user.id,
-                isOwnFiles,
-                isAdmin,
-                pagination: {
-                    currentPage: filterSummary.pagination?.page || 1,
-                    totalPages: filterSummary.pagination ? Math.ceil(totalFiles / filterSummary.pagination.limit) : 1,
-                    totalFiles,
-                    hasNextPage: filterSummary.pagination && filterSummary.pagination.page < Math.ceil(totalFiles / filterSummary.pagination.limit),
-                    hasPrevPage: filterSummary.pagination && filterSummary.pagination.page > 1,
-                    limit: filterSummary.pagination?.limit || 50
-                },
-                filters: filterSummary
-            });
-
-            const response = {
-                success: true,
-                message: 'User files retrieved successfully',
-                files,
-                meta: {
-                    userId,
-                    pagination: {
-                        currentPage: filterSummary.pagination?.page || 1,
-                        totalPages: filterSummary.pagination ? Math.ceil(totalFiles / filterSummary.pagination.limit) : 1,
-                        totalFiles,
-                        hasNextPage: filterSummary.pagination && filterSummary.pagination.page < Math.ceil(totalFiles / filterSummary.pagination.limit),
-                        hasPrevPage: filterSummary.pagination && filterSummary.pagination.page > 1,
-                        limit: filterSummary.pagination?.limit || 50
-                    },
-                    filters: filterSummary,
-                    summary: {
-                        totalFiles,
-                        totalSize: files.reduce((total, file) => total + (file.size || 0), 0),
-                        fileTypes: [...new Set(files.map(file => file.type).filter(Boolean))],
-                        inlineStorage: files.filter(file => file.storageType === 'inline').reduce((total, file) => total + (file.size || 0), 0),
-                        gridfsStorage: files.filter(file => file.storageType === 'gridfs').reduce((total, file) => total + (file.size || 0), 0),
-                        storageBreakdown: [
-                            {
-                                type: 'inline',
-                                size: files.filter(file => file.storageType === 'inline').reduce((total, file) => total + (file.size || 0), 0)
-                            },
-                            {
-                                type: 'gridfs',
-                                size: files.filter(file => file.storageType === 'gridfs').reduce((total, file) => total + (file.size || 0), 0)
-                            }
-                        ].filter(item => item.size > 0)
-                    },
-                    timestamp: new Date().toISOString()
-                }
-            };
-
-            res.status(200).json(response);
-        } catch (error) {
-            if (error instanceof AppError) throw error;
-            logger.error('Get user files error:', {
-                message: error.message,
-                userId: req.params.id,
-                requesterId: req.user.id
-            });
-            throw new AppError('Error retrieving user files', 500);
-        }
-    }),
-
     /**
      * @desc    Get user statistics
      * @route   GET /api/v1/users/:id/stats
@@ -912,7 +789,6 @@ const userController = {
             const stats = {
                 user: formatUserResponse(user),
                 activity: {},
-                files: {},
                 security: {}
             };
 
@@ -956,42 +832,6 @@ const userController = {
                     {$sort: {count: -1}}
                 ]);
 
-                // Get file statistics (if File model exists)
-                let fileStats = {};
-                try {
-                    const userObjectId = new mongoose.Types.ObjectId(userId);
-
-                    // Count total files by user - use ObjectId for consistency
-                    const totalFiles = await File.countDocuments({owner: userObjectId});
-
-                    // Get file type distribution
-                    const filesByType = await File.aggregate([
-                        {$match: {owner: userObjectId}},
-                        {$group: {_id: '$mimeType', count: {$sum: 1}}},
-                        {$sort: {count: -1}},
-                        {$limit: 10}
-                    ]);
-
-                    // Calculate total storage used
-                    const storageUsed = await File.aggregate([
-                        {$match: {owner: userObjectId}},
-                        {$group: {_id: null, totalSize: {$sum: {$ifNull: ['$size', 0]}}}}
-                    ]);
-
-                    fileStats = {
-                        totalFiles,
-                        filesByType: filesByType.map(item => ({
-                            type: item._id || 'unknown',
-                            count: item.count
-                        })),
-                        totalStorage: storageUsed.length > 0 ? storageUsed[0].totalSize : 0,
-                        averageFileSize: totalFiles > 0 && storageUsed.length > 0 ?
-                            Math.round(storageUsed[0].totalSize / totalFiles) : 0
-                    };
-                } catch (err) {
-                    fileStats = {error: 'File statistics not available'};
-                }
-
                 // Populate the stats object with results
                 stats.activity = {
                     lastLogin: loginLogs.length > 0 ? loginLogs[0].timestamp : null,
@@ -1008,8 +848,6 @@ const userController = {
                     }))
                 };
 
-                stats.files = fileStats;
-
                 // Security-related information
                 stats.security = {
                     accountCreated: user.createdAt,
@@ -1022,19 +860,6 @@ const userController = {
                 stats.limited = true;
                 delete stats.security;
                 delete stats.activity;
-
-                // Only include basic file stats
-                try {
-                    const userObjectId = new mongoose.Types.ObjectId(userId);
-                    stats.files = {
-                        totalFiles: await File.countDocuments({
-                            owner: userObjectId,
-                            isPublic: true // Only show count of public files
-                        })
-                    };
-                } catch (err) {
-                    stats.files = {error: 'File statistics not available'};
-                }
             }
 
             logger.info(`User stats retrieved for user: ${userId}`, {
@@ -1107,8 +932,7 @@ const userController = {
                         'user.firstName',
                         'user.lastName',
                         'user.roles',
-                        'user.createdAt',
-                        'files.totalFiles' // Only public files count
+                        'user.createdAt'
                     ];
                     return allowedFields.some(allowed => field.startsWith(allowed));
                 }
@@ -1192,61 +1016,6 @@ const userController = {
                                 count: log.count,
                                 avgResponseTime: Math.round(log.avgResponseTime * 100) / 100
                             })));
-                        }
-
-                    } else if (field.startsWith('files.')) {
-                        const fileField = field.replace('files.', '');
-
-                        try {
-                            const userObjectId = new mongoose.Types.ObjectId(userId);
-
-                            // For non-admin/non-self, only show public files
-                            const fileQuery = (!isAdmin && !isSelf) ?
-                                {owner: userObjectId, isPublic: true} :
-                                {owner: userObjectId};
-
-                            if (fileField === 'totalFiles') {
-                                const count = await File.countDocuments(fileQuery);
-                                setNestedProperty(result.data, field, count);
-
-                            } else if (fileField === 'filesByType') {
-                                const filesByType = await File.aggregate([
-                                    {$match: fileQuery},
-                                    {$group: {_id: '$mimeType', count: {$sum: 1}}},
-                                    {$sort: {count: -1}},
-                                    {$limit: 10}
-                                ]);
-
-                                setNestedProperty(result.data, field, filesByType.map(item => ({
-                                    type: item._id || 'unknown',
-                                    count: item.count
-                                })));
-
-                            } else if (fileField === 'totalStorage' && (isAdmin || isSelf)) {
-                                const storageResult = await File.aggregate([
-                                    {$match: fileQuery},
-                                    {$group: {_id: null, totalSize: {$sum: {$ifNull: ['$size', 0]}}}}
-                                ]);
-
-                                setNestedProperty(result.data, field,
-                                    storageResult.length > 0 ? storageResult[0].totalSize : 0);
-
-                            } else if (fileField === 'averageFileSize' && (isAdmin || isSelf)) {
-                                const [totalFiles, storageResult] = await Promise.all([
-                                    File.countDocuments(fileQuery),
-                                    File.aggregate([
-                                        {$match: fileQuery},
-                                        {$group: {_id: null, totalSize: {$sum: {$ifNull: ['$size', 0]}}}}
-                                    ])
-                                ]);
-
-                                const totalStorage = storageResult.length > 0 ? storageResult[0].totalSize : 0;
-                                const avgSize = totalFiles > 0 ? Math.round(totalStorage / totalFiles) : 0;
-                                setNestedProperty(result.data, field, avgSize);
-                            }
-
-                        } catch (err) {
-                            setNestedProperty(result.data, field, {error: 'File statistics not available'});
                         }
 
                     } else if (field.startsWith('security.') && (isAdmin || isSelf)) {
@@ -1512,7 +1281,238 @@ const userController = {
         }
     }),
 
+    // =========================================================================
+    // FOLLOW ACTIONS
+    // =========================================================================
 
+    /**
+     * @desc    Follow a user
+     * @route   POST /api/v1/users/:id/follow
+     * @access  Authenticated
+     */
+    followUser: asyncHandler(async (req, res, next) => {
+        const followerId = req.user.id;
+        const followingId = req.params.id;
+
+        if (followerId === followingId) {
+            return next(new AppError('You cannot follow yourself', 400));
+        }
+
+        const targetUser = await User.findById(followingId).select('_id');
+        if (!targetUser) {
+            return next(new AppError('User not found', 404));
+        }
+
+        await Follow.findOneAndUpdate(
+            {follower: followerId, following: followingId},
+            {follower: followerId, following: followingId},
+            {upsert: true, new: true, setDefaultsOnInsert: true}
+        );
+
+        await Promise.all([
+            cache.del(`follows:followers:${followingId}`),
+            cache.del(`follows:following:${followerId}`),
+            cache.del(`follows:mutuals:${followerId}`),
+            cache.del(`follows:mutuals:${followingId}`),
+            cache.del(`follows:counts:${followerId}`),
+            cache.del(`follows:counts:${followingId}`)
+        ]);
+
+        logger.info(`[Follow] ${followerId} followed ${followingId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'User followed successfully'
+        });
+    }),
+
+    /**
+     * @desc    Unfollow a user
+     * @route   DELETE /api/v1/users/:id/follow
+     * @access  Authenticated
+     */
+    unfollowUser: asyncHandler(async (req, res, next) => {
+        const followerId = req.user.id;
+        const followingId = req.params.id;
+
+        const result = await Follow.findOneAndDelete({
+            follower: followerId,
+            following: followingId
+        });
+
+        if (!result) {
+            return next(new AppError('You are not following this user', 400));
+        }
+
+        await Promise.all([
+            cache.del(`follows:followers:${followingId}`),
+            cache.del(`follows:following:${followerId}`),
+            cache.del(`follows:mutuals:${followerId}`),
+            cache.del(`follows:mutuals:${followingId}`),
+            cache.del(`follows:counts:${followerId}`),
+            cache.del(`follows:counts:${followingId}`)
+        ]);
+
+        logger.info(`[Follow] ${followerId} unfollowed ${followingId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'User unfollowed successfully'
+        });
+    }),
+
+    /**
+     * @desc    Get users that the specified user is following
+     * @route   GET /api/v1/users/:id/following
+     * @access  Authenticated
+     */
+    getFollowing: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [follows, total] = await Promise.all([
+            Follow.find({follower: userId})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('following', 'firstName lastName username email profilePhoto'),
+            Follow.countDocuments({follower: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: follows.map(f => f.following),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get followers of a user
+     * @route   GET /api/v1/users/:id/followers
+     * @access  Authenticated
+     */
+    getFollowers: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [follows, total] = await Promise.all([
+            Follow.find({following: userId})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('follower', 'firstName lastName username email profilePhoto'),
+            Follow.countDocuments({following: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: follows.map(f => f.follower),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get mutual follows (users who follow each other)
+     * @route   GET /api/v1/users/mutuals
+     * @access  Authenticated
+     */
+    getMutuals: asyncHandler(async (req, res) => {
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const pipeline = [
+            {$match: {follower: userId}},
+            {
+                $lookup: {
+                    from: 'follows',
+                    let: {targetUser: '$following'},
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        {$eq: ['$follower', '$$targetUser']},
+                                        {$eq: ['$following', userId]}
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'reverse'
+                }
+            },
+            {$match: {'reverse.0': {$exists: true}}},
+            {
+                $facet: {
+                    data: [{$skip: skip}, {$limit: limit}],
+                    count: [{$count: 'total'}]
+                }
+            }
+        ];
+
+        const [result] = await Follow.aggregate(pipeline);
+        const mutualFollowDocs = result.data || [];
+        const total = result.count[0]?.total || 0;
+
+        const mutualUserIds = mutualFollowDocs.map(d => d.following);
+        const mutualUsers = await User.find({_id: {$in: mutualUserIds}})
+            .select('firstName lastName username email profilePhoto');
+
+        res.status(200).json({
+            success: true,
+            data: mutualUsers,
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get follow counts for a user
+     * @route   GET /api/v1/users/:id/follow-counts
+     * @access  Authenticated
+     */
+    getFollowCounts: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+
+        const [followingCount, followerCount] = await Promise.all([
+            Follow.countDocuments({follower: userId}),
+            Follow.countDocuments({following: userId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {followingCount, followerCount}
+        });
+    }),
+
+    /**
+     * @desc    Check if current user follows a specific user
+     * @route   GET /api/v1/users/:id/follow-status
+     * @access  Authenticated
+     */
+    getFollowStatus: asyncHandler(async (req, res) => {
+        const currentUserId = req.user.id;
+        const targetUserId = req.params.id;
+
+        const [isFollowing, isFollowedBy] = await Promise.all([
+            Follow.exists({follower: currentUserId, following: targetUserId}),
+            Follow.exists({follower: targetUserId, following: currentUserId})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                isFollowing: !!isFollowing,
+                isFollowedBy: !!isFollowedBy,
+                isMutual: !!isFollowing && !!isFollowedBy
+            }
+        });
+    })
 };
 
 export {userController, formatUserResponse, formatPublicUserResponse};

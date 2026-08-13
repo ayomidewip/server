@@ -1,5 +1,5 @@
 import User from '../models/user.model.js';
-import {Follow} from '../models/user.model.js';
+import {Connection} from '../models/user.model.js';
 import Log from '../models/log.model.js';
 import mongoose from 'mongoose';
 import {asyncHandler} from '../middleware/app.middleware.js';
@@ -485,7 +485,7 @@ const userController = {
                 updatedUser = await User.findByIdAndUpdate(
                     req.params.id,
                     {$set: sanitizedUpdates},
-                    {new: true, runValidators: true}
+                    {returnDocument: 'after', runValidators: true}
                 ).select('+active'); // Include the active field in the response
             } catch (updateError) {
                 logger.error(`Error updating user ${req.params.id}:`, {
@@ -855,11 +855,6 @@ const userController = {
                     twoFactorEnabled: !!user.twoFactorEnabled,
                     active: !!user.active
                 };
-            } else {
-                // Limited view for non-admins viewing other users
-                stats.limited = true;
-                delete stats.security;
-                delete stats.activity;
             }
 
             logger.info(`User stats retrieved for user: ${userId}`, {
@@ -1033,9 +1028,6 @@ const userController = {
                         } else {
                             setNestedProperty(result.data, field, null);
                         }
-
-                    } else if (field.startsWith('security.') && !isAdmin && !isSelf) {
-                        setNestedProperty(result.data, field, {error: 'Access denied - security information restricted'});
 
                     } else {
                         setNestedProperty(result.data, field, {error: 'Unknown field'});
@@ -1282,234 +1274,335 @@ const userController = {
     }),
 
     // =========================================================================
-    // FOLLOW ACTIONS
+    // CONNECTION ACTIONS (LinkedIn-style symmetric connections)
     // =========================================================================
 
     /**
-     * @desc    Follow a user
-     * @route   POST /api/v1/users/:id/follow
+     * @desc    Send a connection request to a user
+     * @route   POST /api/v1/users/:id/connect
      * @access  Authenticated
      */
-    followUser: asyncHandler(async (req, res, next) => {
-        const followerId = req.user.id;
-        const followingId = req.params.id;
+    sendConnectionRequest: asyncHandler(async (req, res, next) => {
+        const requesterId = req.user.id;
+        const recipientId = req.params.id;
 
-        if (followerId === followingId) {
-            return next(new AppError('You cannot follow yourself', 400));
+        if (requesterId === recipientId) {
+            return next(new AppError('You cannot connect with yourself', 400));
         }
 
-        const targetUser = await User.findById(followingId).select('_id');
+        const targetUser = await User.findById(recipientId).select('_id');
         if (!targetUser) {
             return next(new AppError('User not found', 404));
         }
 
-        await Follow.findOneAndUpdate(
-            {follower: followerId, following: followingId},
-            {follower: followerId, following: followingId},
-            {upsert: true, new: true, setDefaultsOnInsert: true}
-        );
-
-        await Promise.all([
-            cache.del(`follows:followers:${followingId}`),
-            cache.del(`follows:following:${followerId}`),
-            cache.del(`follows:mutuals:${followerId}`),
-            cache.del(`follows:mutuals:${followingId}`),
-            cache.del(`follows:counts:${followerId}`),
-            cache.del(`follows:counts:${followingId}`)
-        ]);
-
-        logger.info(`[Follow] ${followerId} followed ${followingId}`);
-
-        res.status(200).json({
-            success: true,
-            message: 'User followed successfully'
-        });
-    }),
-
-    /**
-     * @desc    Unfollow a user
-     * @route   DELETE /api/v1/users/:id/follow
-     * @access  Authenticated
-     */
-    unfollowUser: asyncHandler(async (req, res, next) => {
-        const followerId = req.user.id;
-        const followingId = req.params.id;
-
-        const result = await Follow.findOneAndDelete({
-            follower: followerId,
-            following: followingId
+        // Check if a connection already exists in either direction
+        const existing = await Connection.findOne({
+            $or: [
+                {requester: requesterId, recipient: recipientId},
+                {requester: recipientId, recipient: requesterId}
+            ]
         });
 
-        if (!result) {
-            return next(new AppError('You are not following this user', 400));
+        if (existing) {
+            if (existing.status === 'accepted') {
+                return next(new AppError('You are already connected with this user', 400));
+            }
+            if (existing.status === 'pending') {
+                // If the other user already sent us a request, auto-accept
+                if (existing.requester.toString() === recipientId) {
+                    existing.status = 'accepted';
+                    await existing.save();
+
+                    await Promise.all([
+                        cache.del(`connections:${requesterId}`),
+                        cache.del(`connections:${recipientId}`),
+                        cache.del(`connections:pending:${requesterId}`),
+                        cache.del(`connections:pending:${recipientId}`),
+                        cache.del(`connections:sent:${requesterId}`),
+                        cache.del(`connections:sent:${recipientId}`),
+                        cache.del(`connections:counts:${requesterId}`),
+                        cache.del(`connections:counts:${recipientId}`)
+                    ]);
+
+                    logger.info(`[Connection] ${requesterId} auto-accepted connection with ${recipientId}`);
+
+                    return res.status(200).json({
+                        success: true,
+                        message: 'Connection request accepted (mutual request)'
+                    });
+                }
+                return next(new AppError('Connection request already sent', 400));
+            }
+            if (existing.status === 'rejected') {
+                // Allow re-requesting after rejection
+                existing.status = 'pending';
+                existing.requester = requesterId;
+                existing.recipient = recipientId;
+                await existing.save();
+
+                await Promise.all([
+                    cache.del(`connections:pending:${recipientId}`),
+                    cache.del(`connections:sent:${requesterId}`),
+                    cache.del(`connections:counts:${requesterId}`),
+                    cache.del(`connections:counts:${recipientId}`)
+                ]);
+
+                logger.info(`[Connection] ${requesterId} re-sent connection request to ${recipientId}`);
+
+                return res.status(200).json({
+                    success: true,
+                    message: 'Connection request sent'
+                });
+            }
         }
 
+        await Connection.create({requester: requesterId, recipient: recipientId});
+
         await Promise.all([
-            cache.del(`follows:followers:${followingId}`),
-            cache.del(`follows:following:${followerId}`),
-            cache.del(`follows:mutuals:${followerId}`),
-            cache.del(`follows:mutuals:${followingId}`),
-            cache.del(`follows:counts:${followerId}`),
-            cache.del(`follows:counts:${followingId}`)
+            cache.del(`connections:pending:${recipientId}`),
+            cache.del(`connections:sent:${requesterId}`),
+            cache.del(`connections:counts:${requesterId}`),
+            cache.del(`connections:counts:${recipientId}`)
         ]);
 
-        logger.info(`[Follow] ${followerId} unfollowed ${followingId}`);
+        logger.info(`[Connection] ${requesterId} sent connection request to ${recipientId}`);
 
         res.status(200).json({
             success: true,
-            message: 'User unfollowed successfully'
+            message: 'Connection request sent'
         });
     }),
 
     /**
-     * @desc    Get users that the specified user is following
-     * @route   GET /api/v1/users/:id/following
+     * @desc    Respond to a connection request (accept or reject)
+     * @route   PUT /api/v1/users/:id/connect
      * @access  Authenticated
      */
-    getFollowing: asyncHandler(async (req, res) => {
-        const userId = req.params.id;
-        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-        const skip = (page - 1) * limit;
+    respondToConnection: asyncHandler(async (req, res, next) => {
+        const currentUserId = req.user.id;
+        const requesterId = req.params.id;
+        const {action} = req.body;
 
-        const [follows, total] = await Promise.all([
-            Follow.find({follower: userId})
-                .sort({createdAt: -1})
-                .skip(skip)
-                .limit(limit)
-                .populate('following', 'firstName lastName username email profilePhoto'),
-            Follow.countDocuments({follower: userId})
+        if (!['accept', 'reject'].includes(action)) {
+            return next(new AppError('Action must be "accept" or "reject"', 400));
+        }
+
+        const connection = await Connection.findOne({
+            requester: requesterId,
+            recipient: currentUserId,
+            status: 'pending'
+        });
+
+        if (!connection) {
+            return next(new AppError('No pending connection request from this user', 404));
+        }
+
+        connection.status = action === 'accept' ? 'accepted' : 'rejected';
+        await connection.save();
+
+        await Promise.all([
+            cache.del(`connections:${currentUserId}`),
+            cache.del(`connections:${requesterId}`),
+            cache.del(`connections:pending:${currentUserId}`),
+            cache.del(`connections:sent:${requesterId}`),
+            cache.del(`connections:counts:${currentUserId}`),
+            cache.del(`connections:counts:${requesterId}`)
         ]);
 
+        logger.info(`[Connection] ${currentUserId} ${action}ed request from ${requesterId}`);
+
         res.status(200).json({
             success: true,
-            data: follows.map(f => f.following),
-            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+            message: `Connection request ${action}ed`
         });
     }),
 
     /**
-     * @desc    Get followers of a user
-     * @route   GET /api/v1/users/:id/followers
+     * @desc    Remove a connection or cancel a sent request
+     * @route   DELETE /api/v1/users/:id/connect
      * @access  Authenticated
      */
-    getFollowers: asyncHandler(async (req, res) => {
-        const userId = req.params.id;
-        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-        const skip = (page - 1) * limit;
-
-        const [follows, total] = await Promise.all([
-            Follow.find({following: userId})
-                .sort({createdAt: -1})
-                .skip(skip)
-                .limit(limit)
-                .populate('follower', 'firstName lastName username email profilePhoto'),
-            Follow.countDocuments({following: userId})
-        ]);
-
-        res.status(200).json({
-            success: true,
-            data: follows.map(f => f.follower),
-            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
-        });
-    }),
-
-    /**
-     * @desc    Get mutual follows (users who follow each other)
-     * @route   GET /api/v1/users/mutuals
-     * @access  Authenticated
-     */
-    getMutuals: asyncHandler(async (req, res) => {
-        const userId = new mongoose.Types.ObjectId(req.user.id);
-        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-        const skip = (page - 1) * limit;
-
-        const pipeline = [
-            {$match: {follower: userId}},
-            {
-                $lookup: {
-                    from: 'follows',
-                    let: {targetUser: '$following'},
-                    pipeline: [
-                        {
-                            $match: {
-                                $expr: {
-                                    $and: [
-                                        {$eq: ['$follower', '$$targetUser']},
-                                        {$eq: ['$following', userId]}
-                                    ]
-                                }
-                            }
-                        }
-                    ],
-                    as: 'reverse'
-                }
-            },
-            {$match: {'reverse.0': {$exists: true}}},
-            {
-                $facet: {
-                    data: [{$skip: skip}, {$limit: limit}],
-                    count: [{$count: 'total'}]
-                }
-            }
-        ];
-
-        const [result] = await Follow.aggregate(pipeline);
-        const mutualFollowDocs = result.data || [];
-        const total = result.count[0]?.total || 0;
-
-        const mutualUserIds = mutualFollowDocs.map(d => d.following);
-        const mutualUsers = await User.find({_id: {$in: mutualUserIds}})
-            .select('firstName lastName username email profilePhoto');
-
-        res.status(200).json({
-            success: true,
-            data: mutualUsers,
-            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
-        });
-    }),
-
-    /**
-     * @desc    Get follow counts for a user
-     * @route   GET /api/v1/users/:id/follow-counts
-     * @access  Authenticated
-     */
-    getFollowCounts: asyncHandler(async (req, res) => {
-        const userId = req.params.id;
-
-        const [followingCount, followerCount] = await Promise.all([
-            Follow.countDocuments({follower: userId}),
-            Follow.countDocuments({following: userId})
-        ]);
-
-        res.status(200).json({
-            success: true,
-            data: {followingCount, followerCount}
-        });
-    }),
-
-    /**
-     * @desc    Check if current user follows a specific user
-     * @route   GET /api/v1/users/:id/follow-status
-     * @access  Authenticated
-     */
-    getFollowStatus: asyncHandler(async (req, res) => {
+    removeConnection: asyncHandler(async (req, res, next) => {
         const currentUserId = req.user.id;
         const targetUserId = req.params.id;
 
-        const [isFollowing, isFollowedBy] = await Promise.all([
-            Follow.exists({follower: currentUserId, following: targetUserId}),
-            Follow.exists({follower: targetUserId, following: currentUserId})
+        const result = await Connection.findOneAndDelete({
+            $or: [
+                {requester: currentUserId, recipient: targetUserId},
+                {requester: targetUserId, recipient: currentUserId}
+            ]
+        });
+
+        if (!result) {
+            return next(new AppError('No connection found with this user', 400));
+        }
+
+        await Promise.all([
+            cache.del(`connections:${currentUserId}`),
+            cache.del(`connections:${targetUserId}`),
+            cache.del(`connections:pending:${currentUserId}`),
+            cache.del(`connections:pending:${targetUserId}`),
+            cache.del(`connections:sent:${currentUserId}`),
+            cache.del(`connections:sent:${targetUserId}`),
+            cache.del(`connections:counts:${currentUserId}`),
+            cache.del(`connections:counts:${targetUserId}`)
         ]);
+
+        logger.info(`[Connection] ${currentUserId} removed connection with ${targetUserId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Connection removed'
+        });
+    }),
+
+    /**
+     * @desc    Get accepted connections for a user
+     * @route   GET /api/v1/users/:id/connections
+     * @access  Authenticated
+     */
+    getConnections: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [connections, total] = await Promise.all([
+            Connection.find({
+                $or: [{requester: userId}, {recipient: userId}],
+                status: 'accepted'
+            })
+                .sort({updatedAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('requester', 'firstName lastName username email profilePhoto')
+                .populate('recipient', 'firstName lastName username email profilePhoto'),
+            Connection.countDocuments({
+                $or: [{requester: userId}, {recipient: userId}],
+                status: 'accepted'
+            })
+        ]);
+
+        // Return the other user in each connection
+        const data = connections.map(c => {
+            return c.requester._id.toString() === userId ? c.recipient : c.requester;
+        });
+
+        res.status(200).json({
+            success: true,
+            data,
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get pending incoming connection requests
+     * @route   GET /api/v1/users/connections/pending
+     * @access  Authenticated
+     */
+    getPendingRequests: asyncHandler(async (req, res) => {
+        const userId = req.user.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [requests, total] = await Promise.all([
+            Connection.find({recipient: userId, status: 'pending'})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('requester', 'firstName lastName username email profilePhoto'),
+            Connection.countDocuments({recipient: userId, status: 'pending'})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: requests.map(r => r.requester),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get sent outgoing connection requests
+     * @route   GET /api/v1/users/connections/sent
+     * @access  Authenticated
+     */
+    getSentRequests: asyncHandler(async (req, res) => {
+        const userId = req.user.id;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
+
+        const [requests, total] = await Promise.all([
+            Connection.find({requester: userId, status: 'pending'})
+                .sort({createdAt: -1})
+                .skip(skip)
+                .limit(limit)
+                .populate('recipient', 'firstName lastName username email profilePhoto'),
+            Connection.countDocuments({requester: userId, status: 'pending'})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: requests.map(r => r.recipient),
+            pagination: {page, limit, total, pages: Math.ceil(total / limit)}
+        });
+    }),
+
+    /**
+     * @desc    Get connection counts for a user
+     * @route   GET /api/v1/users/:id/connection-counts
+     * @access  Authenticated
+     */
+    getConnectionCounts: asyncHandler(async (req, res) => {
+        const userId = req.params.id;
+
+        const [connectionCount, pendingCount] = await Promise.all([
+            Connection.countDocuments({
+                $or: [{requester: userId}, {recipient: userId}],
+                status: 'accepted'
+            }),
+            Connection.countDocuments({recipient: userId, status: 'pending'})
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {connectionCount, pendingCount}
+        });
+    }),
+
+    /**
+     * @desc    Check connection status with a user
+     * @route   GET /api/v1/users/:id/connection-status
+     * @access  Authenticated
+     */
+    getConnectionStatus: asyncHandler(async (req, res) => {
+        const currentUserId = req.user.id;
+        const targetUserId = req.params.id;
+
+        const connection = await Connection.findOne({
+            $or: [
+                {requester: currentUserId, recipient: targetUserId},
+                {requester: targetUserId, recipient: currentUserId}
+            ]
+        });
+
+        let status = 'none';
+        if (connection) {
+            if (connection.status === 'accepted') {
+                status = 'connected';
+            } else if (connection.status === 'pending') {
+                status = connection.requester.toString() === currentUserId ? 'pending_sent' : 'pending_received';
+            } else if (connection.status === 'rejected') {
+                status = 'rejected';
+            }
+        }
 
         res.status(200).json({
             success: true,
             data: {
-                isFollowing: !!isFollowing,
-                isFollowedBy: !!isFollowedBy,
-                isMutual: !!isFollowing && !!isFollowedBy
+                status,
+                isConnected: connection?.status === 'accepted'
             }
         });
     })

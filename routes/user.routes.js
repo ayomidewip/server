@@ -13,17 +13,17 @@ const router = Router();
 router.validRoutes = [
     '/api/v1/users',
     '/api/v1/users/public',
-    '/api/v1/users/mutuals',
+    '/api/v1/users/connections/pending',
+    '/api/v1/users/connections/sent',
     '/api/v1/users/stats/overview',
     '/api/v1/users/:id',
     '/api/v1/users/:id/password',
     '/api/v1/users/:id/stats',
     '/api/v1/users/:id/stats/fields',
-    '/api/v1/users/:id/follow',
-    '/api/v1/users/:id/following',
-    '/api/v1/users/:id/followers',
-    '/api/v1/users/:id/follow-counts',
-    '/api/v1/users/:id/follow-status'
+    '/api/v1/users/:id/connect',
+    '/api/v1/users/:id/connections',
+    '/api/v1/users/:id/connection-counts',
+    '/api/v1/users/:id/connection-status'
 ];
 
 /**
@@ -45,61 +45,69 @@ router.get('/public',
 router.use(authMiddleware.verifyToken());
 
 // =========================================================================
-// FOLLOW ROUTES (nested under /users)
+// CONNECTION ROUTES (nested under /users)
 // =========================================================================
 
 /**
- * Get Mutuals:
- * Route Definition: GET /api/v1/users/mutuals
+ * Get Pending Incoming Requests:
+ * Route Definition: GET /api/v1/users/connections/pending
  * Permission: Authenticated
  * Note: Must be before /:id routes to avoid param conflict
  */
-router.get('/mutuals', userController.getMutuals);
+router.get('/connections/pending', userController.getPendingRequests);
 
 /**
- * Follow a user:
- * Route Definition: POST /api/v1/users/:id/follow
+ * Get Sent Outgoing Requests:
+ * Route Definition: GET /api/v1/users/connections/sent
  * Permission: Authenticated
+ * Note: Must be before /:id routes to avoid param conflict
  */
-router.post('/:id/follow', userController.followUser);
+router.get('/connections/sent', userController.getSentRequests);
 
 /**
- * Unfollow a user:
- * Route Definition: DELETE /api/v1/users/:id/follow
+ * Send a connection request:
+ * Route Definition: POST /api/v1/users/:id/connect
  * Permission: Authenticated
  */
-router.delete('/:id/follow', userController.unfollowUser);
+router.post('/:id/connect', userController.sendConnectionRequest);
 
 /**
- * Get Following List:
- * Route Definition: GET /api/v1/users/:id/following
+ * Respond to a connection request (accept/reject):
+ * Route Definition: PUT /api/v1/users/:id/connect
  * Permission: Authenticated
  */
-router.get('/:id/following', userController.getFollowing);
+router.put('/:id/connect', userController.respondToConnection);
 
 /**
- * Get Followers List:
- * Route Definition: GET /api/v1/users/:id/followers
+ * Remove a connection or cancel a sent request:
+ * Route Definition: DELETE /api/v1/users/:id/connect
  * Permission: Authenticated
  */
-router.get('/:id/followers', userController.getFollowers);
+router.delete('/:id/connect', userController.removeConnection);
 
 /**
- * Get Follow Counts:
- * Route Definition: GET /api/v1/users/:id/follow-counts
+ * Get Connections List:
+ * Route Definition: GET /api/v1/users/:id/connections
  * Permission: Authenticated
  */
-router.get('/:id/follow-counts',
-    cacheResponse(60, (req) => `follows:counts:${req.params.id}`),
-    userController.getFollowCounts
+router.get('/:id/connections', userController.getConnections);
+
+/**
+ * Get Connection Counts:
+ * Route Definition: GET /api/v1/users/:id/connection-counts
+ * Permission: Authenticated
+ */
+router.get('/:id/connection-counts',
+    cacheResponse(60, (req) => `connections:counts:${req.params.id}`),
+    userController.getConnectionCounts
 );
 
 /**
- * Check Follow Status:
- * Route Definition: GET /api/v1/users/:id/follow-status
+ * Check Connection Status:
+ * Route Definition: GET /api/v1/users/:id/connection-status
  * Permission: Authenticated
  */
-router.get('/:id/follow-status', userController.getFollowStatus);
+router.get('/:id/connection-status', userController.getConnectionStatus);
 
 // ADMIN-ONLY ROUTES (require MANAGE_ALL_USERS permission)
 

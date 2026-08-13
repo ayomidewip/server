@@ -1,31 +1,25 @@
 # App Base Server
 
-### Advanced Features
-- **Storage Management**: Intelligent storage routing between inline and GridFS based on file characteristics
-- **Auto-save System**: Persistent auto-save with configurable intervals and cache-to-database synchronization
-- **Rate Limiting**: Configurable rate limiting for general and authentication endpoints
-- **Security**: Helmet, HPP, CORS protection with file upload security
-- **API Documentation**: Comprehensive REST API with filtering, pagination, and sortingckend API Server with Advanced File Management and Real-time Collaboration**
+**Backend API Server Template with Authentication, User Management, Dynamic Themes, and Caching**
 
-A comprehensive Node.js + Express server application featuring advanced file management, real-time collaboration, Redis caching, and robust authentication systems.
+A comprehensive Node.js + Express server template featuring robust authentication, role-based access control, user connections, dynamic themes, Redis caching, and a template-based email service. This is the server half of the App Base template that other apps (e.g., Creator Base, FilesystemOne) are built on.
+
+> **Note:** File management, GridFS storage, compression, and real-time (Yjs) collaboration are **not** part of App Base. Those features live in FilesystemOne (`filesystem-one/file-server`), which extends this template.
 
 ## 🚀 Features
 
 ### Core Systems
-- **Advanced Authentication**: JWT-based system with access/refresh tokens, 2FA supp**Built with ❤️ using Node.js, Express, MongoDB, and Redis**ased access control
-- **File Management System**: Complete file CRUD with version control, auto-save, and GridFS storage
-- **Real-time Collaboration**: WebSocket-powered collaborative editing using Yjs and y-websocket
+- **Advanced Authentication**: JWT access/refresh tokens with rotation and reuse detection, CSRF protection, TOTP 2FA with backup codes, email verification, device tracking, and role-based access control
+- **User Management**: User CRUD, public user directory, per-user and overview statistics, and LinkedIn-style connections (request/accept/reject)
+- **Dynamic Themes**: User-created theme token documents with visibility controls, built-in presets, and forking (`/api/v1/themes`)
 - **Caching Layer**: Redis-powered caching with automatic invalidation and cleanup
 - **Email Service**: Template-based email system with SMTP support
 - **Comprehensive Logging**: Winston-based logging with MongoDB persistence and colorized console output
 
 ### Advanced Features
-- **Storage Management**: Intelligent storage routing between inline and GridFS based on file characteristics
-- **Auto-save System**: Persistent auto-save with configurable intervals and cache-to-database synchronization
-- **Storage Management**: Intelligent storage routing between inline and GridFS based on file characteristics
-- **Auto-save System**: Persistent auto-save with configurable intervals and cache-to-database synchronization
+- **Role System**: Five hierarchical roles (OWNER → USER) with rights mapping and an owner-approval role-elevation flow
 - **Rate Limiting**: Configurable rate limiting for general and authentication endpoints
-- **Security**: Helmet, HPP, CORS protection with file upload security
+- **Security**: Helmet, HPP, CORS protection, input sanitization, and route allowlisting
 - **API Documentation**: Comprehensive REST API with filtering, pagination, and sorting
 
 ## 📋 Requirements
@@ -102,7 +96,7 @@ cp .env.example .env
 - Redis cache configuration (optional but recommended)
 - CORS origins for frontend
 - Email service (SMTP configuration)
-- File upload limits and security
+- Request payload size limits
 - Logging, rate limiting, and more
 
 ### Critical Setup Steps
@@ -120,7 +114,7 @@ cp .env.example .env
 
 ## 📊 Redis Setup (Optional but Recommended)
 
-Redis provides caching capabilities that significantly improve API performance and enable advanced features like auto-save persistence and cache cleanup services.
+Redis provides caching capabilities that significantly improve API performance and enable features like response caching, token blacklisting, and the cache cleanup service.
 
 ### Quick Setup Options
 
@@ -531,68 +525,6 @@ EMAIL_ENABLED=false
 
 The application will function normally, but features requiring email (verification, password reset) will be disabled.
 
-## 📁 Advanced File System
-
-### File Storage Architecture
-
-The application uses intelligent storage routing:
-
-- **Inline Storage**: Small text files stored directly in MongoDB documents
-- **GridFS Storage**: Large files and binary content stored in MongoDB GridFS
-- **Automatic Detection**: Storage type determined by file size and MIME type
-
-### Supported File Types
-
-The system supports extensive file type detection:
-- **Text**: txt, md, log, csv
-- **Code**: js, ts, jsx, tsx, py, java, cpp, css, html, json
-- **Config**: ini, conf, env, toml, yaml
-- **Documentation**: md, rst, adoc, tex
-- **Web**: html, css, js, vue, svelte
-- **Binary**: pdf, docx, xlsx, images, etc.
-
-### File Security
-
-- **Upload Filtering**: Configurable blocked file extensions
-- **Path Validation**: Prevents directory traversal attacks
-- **MIME Type Validation**: Validates file content matches extension
-- **Size Limits**: Configurable upload size limits (default 500MB)
-
-## 🔄 Real-time Collaboration
-
-### WebSocket-based Collaborative Editing
-
-The application uses **y-websocket** with **Yjs** for real-time collaborative editing:
-
-- **Yjs Integration**: Conflict-free replicated data types (CRDTs) for operational transformation
-- **MongoDB Persistence**: Collaborative documents stored using `y-mongodb-provider`
-- **WebSocket Server**: Standard WebSocket server with y-websocket protocol for real-time communication
-- **Presence Awareness**: Track and display active collaborators per file
-- **Access Control**: JWT-based authentication for WebSocket connections
-
-### WebSocket Connection
-
-```javascript
-// Client-side connection example using y-websocket
-import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
-
-const ydoc = new Y.Doc();
-const wsProvider = new WebsocketProvider(
-  'ws://localhost:8080',
-  'your-file-path',
-  ydoc,
-  { params: { token: 'your-jwt-token' } }
-);
-```
-
-### API Endpoints
-
-```http
-GET  /api/v1/files/:filePath/collaborators  # Get active collaborators
-POST /api/v1/files/:fileId/sync            # Sync collaborative document
-```
-
 ## 🔐 Advanced Authentication
 
 ### JWT Token System
@@ -664,98 +596,91 @@ LOG_LEVEL=http          # Set minimum log level (error, warn, info, http, verbos
 
 ### Authentication Endpoints
 ```http
+GET  /api/v1/auth/csrf-token      # Get a fresh CSRF token
 POST /api/v1/auth/signup          # Register new user
 POST /api/v1/auth/login           # User login with credentials
-POST /api/v1/auth/refresh-token   # Refresh access token
+POST /api/v1/auth/refresh-token   # Refresh access token (rotation + reuse detection)
+GET  /api/v1/auth/ws-token        # Short-lived token for WebSocket auth
 POST /api/v1/auth/logout          # Secure logout (blacklist tokens)
-GET  /api/v1/auth/me             # Get current user profile
+GET  /api/v1/auth/me              # Get current user profile
+GET  /api/v1/auth/devices         # List known devices for the user
 POST /api/v1/auth/forgot-password # Request password reset
 POST /api/v1/auth/reset-password/:token # Reset password with token
 
 # Two-Factor Authentication
-POST /api/v1/auth/2fa/setup       # Setup 2FA with QR code
-POST /api/v1/auth/2fa/verify      # Verify 2FA token
-POST /api/v1/auth/2fa/disable     # Disable 2FA
+POST /api/v1/auth/2fa/setup        # Setup 2FA with QR code
+POST /api/v1/auth/2fa/verify-setup # Verify token and enable 2FA
+POST /api/v1/auth/2fa/disable      # Disable 2FA
+GET  /api/v1/auth/2fa/status       # Get 2FA status
+POST /api/v1/auth/2fa/backup-codes # Generate new backup codes
+
+# Email Verification
+POST /api/v1/auth/send-verification-email # Send verification email
+GET  /api/v1/auth/verify-email/:token     # Verify email with token
+
+# Role Management
+POST /api/v1/auth/roles/request-elevation  # Request a role elevation
+POST /api/v1/auth/roles/approve/:userId    # Approve role request (owner only)
+POST /api/v1/auth/roles/reject/:userId     # Reject role request (owner only)
+GET  /api/v1/auth/roles/pending-requests   # List pending requests (owner only)
 ```
 
 ### User Management
 ```http
 GET    /api/v1/users              # Get all users (admin only)
 POST   /api/v1/users              # Create user (admin only)
+GET    /api/v1/users/public       # Public user directory (limited fields)
+GET    /api/v1/users/stats/overview # User overview stats (admin only)
 GET    /api/v1/users/:id          # Get specific user
 PUT    /api/v1/users/:id          # Update user profile
 DELETE /api/v1/users/:id          # Delete user
-PATCH  /api/v1/users/:id/change-password # Change password
+PUT    /api/v1/users/:id/password # Change password
 GET    /api/v1/users/:id/stats    # Get user statistics
+GET    /api/v1/users/:id/stats/fields?fields=a.b,c.d # Select specific stat fields
 ```
 
-### Advanced File System
+### Connections (LinkedIn-style)
 ```http
-# File Operations
-GET    /api/v1/files              # List files with filtering/pagination
-POST   /api/v1/files              # Create new file
-GET    /api/v1/files/:filePath    # Get file metadata
-PUT    /api/v1/files/:filePath    # Update file metadata  
-DELETE /api/v1/files/:filePath    # Delete file/version
-GET    /api/v1/files/:filePath/content # Get file content
-PUT    /api/v1/files/:filePath/autosave # Auto-save to cache
-POST   /api/v1/files/:filePath/save # Save as new version
-POST   /api/v1/files/:filePath/publish # Publish current content
-
-# File Versions
-GET    /api/v1/files/:filePath/versions # Get all versions
-DELETE /api/v1/files/:filePath/versions/:version # Delete version
-
-# File Upload
-POST   /api/v1/files/upload       # Upload single or multiple files
-
-# File Management  
-GET    /api/v1/files/types        # Get supported file types
-GET    /api/v1/files/stats        # File storage statistics
-GET    /api/v1/files/admin/stats  # Admin file statistics
-GET    /api/v1/files/autosave/status # Auto-save service status (admin)
-POST   /api/v1/files/bulk         # Bulk operations
-POST   /api/v1/files/directory    # Create directory
-GET    /api/v1/files/tree         # Get file tree structure
-GET    /api/v1/files/access/:accessType # Get files by access type
-GET    /api/v1/files/directory/:dirPath/contents # Directory contents
-GET    /api/v1/files/directory/:dirPath/stats # Directory statistics
-
-# File Operations
-PUT    /api/v1/files/:filePath/move # Move file/directory
-POST   /api/v1/files/:filePath/copy # Copy file/directory
-GET    /api/v1/files/:filePath/download # Download file
-GET    /api/v1/files/:filePath/info # Get file MIME info
-
-# Collaboration & Real-time Editing
-GET    /api/v1/files/:filePath/collaborators # Active collaborators
-POST   /api/v1/files/:fileId/sync # Sync collaborative document
-
-# WebSocket Endpoints (y-websocket)
-# Connect to: ws://localhost:8080/{file-path}?token={jwt-token}
-# Uses Yjs WebSocket protocol for document synchronization and presence
+POST   /api/v1/users/:id/connect            # Send connection request
+PUT    /api/v1/users/:id/connect            # Accept/reject a request
+DELETE /api/v1/users/:id/connect            # Remove connection / cancel request
+GET    /api/v1/users/connections/pending    # Incoming pending requests
+GET    /api/v1/users/connections/sent       # Sent outgoing requests
+GET    /api/v1/users/:id/connections        # Connections list
+GET    /api/v1/users/:id/connection-counts  # Connection counts
+GET    /api/v1/users/:id/connection-status  # Status between you and :id
 ```
 
-### File Sharing & Permissions
+### Themes
 ```http
-GET    /api/v1/files/:filePath/share # Get sharing info
-POST   /api/v1/files/:filePath/share # Share with users
-DELETE /api/v1/files/:filePath/share # Remove sharing
+GET    /api/v1/themes/presets     # Built-in preset themes (public)
+GET    /api/v1/themes/public      # Public theme gallery (public, filterable)
+GET    /api/v1/themes             # Get own themes
+POST   /api/v1/themes             # Create theme (CREATOR and above)
+GET    /api/v1/themes/:id         # Get single theme (visibility enforced)
+PUT    /api/v1/themes/:id         # Update theme (owner or MANAGE_ALL_CONTENT)
+DELETE /api/v1/themes/:id         # Delete theme (owner or MANAGE_ALL_CONTENT)
+POST   /api/v1/themes/:id/fork    # Fork a theme (CREATOR and above)
 ```
 
 ### Cache Management
 ```http
-GET    /api/v1/cache/stats        # Cache statistics
-DELETE /api/v1/cache/clear        # Clear cache (admin)
-GET    /api/v1/cache/keys         # List cache keys (admin)
-DELETE /api/v1/cache/keys/:key    # Delete specific key (admin)
+GET    /api/v1/cache/stats        # Cache statistics (admin)
+DELETE /api/v1/cache              # Clear cache (admin)
+GET    /api/v1/cache/cleanup      # Cleanup service status (admin)
+POST   /api/v1/cache/cleanup      # Trigger manual cleanup (admin)
+GET    /api/v1/cache/health       # Cache health check (admin)
 ```
 
 ### Application Management
 ```http
 GET    /api/v1/health             # Health check
+POST   /api/v1/contact            # Contact form submission (public)
 GET    /api/v1/stats/overview     # System statistics (admin)
-GET    /api/v1/logs               # Application logs (admin)
+GET    /api/v1/stats/performance  # Performance statistics (admin)
+GET    /api/v1/logs               # Application logs (admin, filterable)
+GET    /api/v1/logs/stats         # Log statistics (admin, optional userId)
+GET    /api/v1/logs/:id           # Single log entry (admin)
 DELETE /api/v1/logs               # Clear logs (admin)
 
 # Email Testing (Admin)
@@ -764,19 +689,6 @@ POST   /api/v1/email/test         # Send test email
 ```
 
 ### Query Parameters
-
-#### File Listing (`GET /api/v1/files`)
-```http
-?page=1&limit=20                  # Pagination
-&sortBy=updatedAt&sortOrder=desc  # Sorting
-&search=filename                  # Search in filename/content
-&type=file                        # Filter by type (file/directory)
-&mimeType=text/plain             # Filter by MIME type
-&tags=important,project          # Filter by tags
-&minSize=1024&maxSize=1048576    # Size filtering
-&owner=true                      # Show only owned files
-&shared=true                     # Show only shared files
-```
 
 #### User Listing (`GET /api/v1/users`)
 ```http
@@ -800,34 +712,32 @@ npm test           # Run test suite with Vitest
 ### Project Structure
 ```
 server/
-├── config/          # Database and user rights configuration
-│   ├── db.js        # MongoDB connection and GridFS utilities
-│   └── rights.js    # User roles and permissions system
+├── config/          # Database, rights, and taxonomy configuration
+│   ├── db.js            # MongoDB connection utilities
+│   ├── disciplines.js   # Creative discipline taxonomy + media block types
+│   └── rights.js        # User roles and permissions system
 ├── controllers/     # Request handlers and business logic
-│   ├── app.controller.js    # Health, stats, and system endpoints
-│   ├── auth.controller.js   # Authentication and 2FA
-│   ├── cache.controller.js  # Cache management and cleanup
-│   ├── file.controller.js   # File operations and collaboration
-│   └── user.controller.js   # User management
+│   ├── app.controller.js    # Health, stats, logs, email, contact, themes
+│   ├── auth.controller.js   # Authentication, 2FA, email verification, roles
+│   ├── cache.controller.js  # Cache management and cleanup service
+│   └── user.controller.js   # User management and connections
 ├── middleware/      # Express middleware functions
-│   ├── app.middleware.js      # Core middleware and Redis client
-│   ├── auth.middleware.js     # JWT and permission checking
+│   ├── app.middleware.js      # Core middleware, Redis client, route allowlist
+│   ├── auth.middleware.js     # JWT, CSRF, permission checking, WS auth
 │   ├── cache.middleware.js    # Response caching and invalidation
-│   ├── error.middleware.js    # Global error handling
-│   ├── file.middleware.js     # File upload and Yjs collaborative editing
-│   ├── user.middleware.js     # User validation middleware
+│   ├── error.middleware.js    # Global error handling (AppError)
+│   ├── user.middleware.js     # User validation, devices, stats filters
 │   └── validation.middleware.js # Request validation with Joi
 ├── models/          # MongoDB schemas and data models
-│   ├── file.model.js   # File schema with GridFS support
 │   ├── log.model.js    # Request logging schema
 │   ├── schemas.js      # Joi validation schemas
-│   └── user.model.js   # User schema with roles/permissions
+│   ├── theme.model.js  # Dynamic theme token documents
+│   └── user.model.js   # User schema (roles, 2FA, devices) + Connection
 ├── routes/          # API route definitions
-│   ├── app.routes.js    # System routes (health, logs, email)
+│   ├── app.routes.js    # System routes (health, logs, email, stats, themes)
 │   ├── auth.routes.js   # Authentication endpoints
 │   ├── cache.routes.js  # Cache management endpoints
-│   ├── file.routes.js   # File system and collaboration
-│   └── user.routes.js   # User management endpoints
+│   └── user.routes.js   # User management and connection endpoints
 ├── templates/       # Email templates (Handlebars)
 │   └── emails/      # Email template files
 ├── utils/           # Utility functions and helpers
@@ -836,23 +746,22 @@ server/
 │   └── validator.js   # Custom validation functions
 ├── .env.example     # Environment variables template
 ├── index.js         # Application entry point
-├── server.js        # Server class with WebSocket support
+├── server.js        # Server class (lifecycle, env validation, route registration)
 └── package.json     # Dependencies and npm scripts
 ```
 
 ### Key Features Implementation
-
-#### Auto-save System
-- Files cached in Redis during editing
-- Configurable persistence interval (default: 5 minutes)
-- Automatic synchronization to MongoDB
-- Conflict detection for concurrent edits
 
 #### Caching Strategy  
 - Response caching with automatic invalidation
 - Entity-based cache keys with dependency tracking
 - TTL-based expiration with cleanup service
 - Cache warming for frequently accessed data
+
+#### Role Elevation Flow
+- Any authenticated user can request elevated roles
+- Requests are queued as pending until the OWNER approves or rejects
+- Elevated roles (anything above USER) always require owner approval
 
 ## 🚢 Production Deployment
 
@@ -874,8 +783,7 @@ Before deploying to production, ensure:
 1. **MongoDB Optimization**:
    - Use MongoDB Atlas or properly configured replica set
    - Enable connection pooling
-   - Create appropriate indexes for file paths and user queries
-   - Configure GridFS for large file storage
+   - Create appropriate indexes for user and log queries
 
 2. **Redis Optimization**:
    - Configure memory limits and eviction policies
@@ -883,23 +791,16 @@ Before deploying to production, ensure:
    - Monitor Redis memory usage
    - Set up Redis clustering for high availability
 
-3. **WebSocket Scaling**:
-   - Use Redis persistence provider for Yjs document scaling (y-redis)
-   - Configure sticky sessions for load balancing WebSocket connections
-   - Monitor WebSocket connection limits
-   - Implement connection pooling for Yjs documents
-
-4. **Security Hardening**:
+3. **Security Hardening**:
    - Use HTTPS/TLS in production
-   - Configure proper CORS origins for both HTTP and WebSocket
-   - Enable rate limiting for both API and WebSocket connections
+   - Configure proper CORS origins
+   - Enable rate limiting for API and auth endpoints
    - Regular security updates and dependency scanning
 
-5. **Monitoring & Observability**:
+4. **Monitoring & Observability**:
    - Set up log aggregation with structured logging
-   - Monitor application metrics and WebSocket connections
+   - Monitor application metrics
    - Configure health check endpoints
-   - Track collaborative document usage and performance
 
 ## 🐛 Troubleshooting
 
@@ -925,7 +826,7 @@ npm run dev
 
 #### Troubleshooting Common Issues
 
-For troubleshooting WebSocket connections, collaboration issues, or any other server problems, refer to the [Logging System](#-logging-system) section and set `LOG_LEVEL=debug` as described there.
+For troubleshooting any server problems, refer to the [Logging System](#-logging-system) section and set `LOG_LEVEL=debug` as described there.
 
 For detailed troubleshooting guides, see:
 - [MongoDB Troubleshooting](https://www.mongodb.com/docs/manual/faq/diagnostics/)
@@ -939,18 +840,3 @@ See [LICENSE.md](./LICENSE.md) for license information.
 ---
 
 **Built with ❤️ using Node.js, Express, MongoDB, and Redis**
-
-## � License
-
-## � API Client Integration
-
-- [Node.js Troubleshooting](https://nodejs.org/en/docs/guides/debugging-getting-started)
-
-## 📄 License
-
-See [LICENSE.md](./LICENSE.md) for license information.
-
----
-
-**Built with ❤️ using Node.js, Express, MongoDB, and Redis**
-

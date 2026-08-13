@@ -1,4 +1,8 @@
 import mongoose from 'mongoose';
+
+// Re-registering a model throws OverwriteModelError; test runners re-evaluate
+// model modules in a shared process, so allow the later registration to win.
+mongoose.set('overwriteModels', true);
 import logger from '../utils/app.logger.js';
 
 const connectDB = async () => {

@@ -2,9 +2,9 @@ import {Router} from 'express';
 import * as appController from '../controllers/app.controller.js';
 import * as authMiddleware from '../middleware/auth.middleware.js';
 import {RIGHTS} from '../config/rights.js';
-import {cacheResponse, noCacheResponse} from '../middleware/cache.middleware.js';
+import {cacheResponse, noCacheResponse, clearCache} from '../middleware/cache.middleware.js';
 import {validateRequest} from '../middleware/validation.middleware.js';
-import {appStatsSchemas} from '../models/schemas.js';
+import {appStatsSchemas, themeSchemas} from '../models/schemas.js';
 
 const router = Router();
 
@@ -18,7 +18,12 @@ router.validRoutes = [
     '/api/v1/email/test',
     '/api/v1/stats/overview',
     '/api/v1/stats/performance',
-    '/api/v1/contact'
+    '/api/v1/contact',
+    '/api/v1/themes',
+    '/api/v1/themes/presets',
+    '/api/v1/themes/public',
+    '/api/v1/themes/:id',
+    '/api/v1/themes/:id/fork'
 ];
 
 // Health check route - NO CACHING (health endpoints should always be real-time)
@@ -83,6 +88,109 @@ router.get('/stats/performance',
         return `app_stats_performance_${period}`;
     }),
     appController.getApplicationPerformanceStats
+);
+
+/* ============================================================================
+ * Theme routes — /api/v1/themes
+ *
+ * Static segments (/presets, /public) are declared before /:id so the param
+ * route does not swallow them. Auth is applied per-route rather than via
+ * router.use() so it cannot leak onto the app routes above.
+ * ========================================================================= */
+
+/**
+ * Get Preset Themes (the seeded built-ins):
+ * Route Definition: GET /api/v1/themes/presets
+ * Permission: Public
+ */
+router.get('/themes/presets',
+    cacheResponse(3600, () => 'themes:presets'), // Cache for 1 hour
+    appController.getPresets
+);
+
+/**
+ * Get Public Theme Gallery:
+ * Route Definition: GET /api/v1/themes/public
+ * Permission: Public
+ */
+router.get('/themes/public',
+    validateRequest(themeSchemas.listThemes, 'query'),
+    cacheResponse(300, (req) => {
+        const params = req.query ? new URLSearchParams(req.query).toString() : '';
+        return `themes:public:${params ? Buffer.from(params).toString('base64') : 'all'}`;
+    }), // Cache for 5 minutes
+    appController.getPublicThemes
+);
+
+/**
+ * Get Own Themes:
+ * Route Definition: GET /api/v1/themes
+ * Permission: Authenticated
+ */
+router.get('/themes',
+    authMiddleware.verifyToken(),
+    appController.getMyThemes
+);
+
+/**
+ * Create Theme:
+ * Route Definition: POST /api/v1/themes
+ * Permission: CREATE_CONTENT (CREATOR and above)
+ */
+router.post('/themes',
+    authMiddleware.verifyToken(),
+    authMiddleware.checkPermission(RIGHTS.CREATE_CONTENT),
+    validateRequest(themeSchemas.createTheme),
+    clearCache(['themes:public:*']),
+    appController.createTheme
+);
+
+/**
+ * Get Single Theme:
+ * Route Definition: GET /api/v1/themes/:id
+ * Permission: Authenticated (visibility rules enforced in controller)
+ */
+router.get('/themes/:id',
+    authMiddleware.verifyToken(),
+    validateRequest(themeSchemas.themeId, 'params'),
+    appController.getThemeById
+);
+
+/**
+ * Update Theme:
+ * Route Definition: PUT /api/v1/themes/:id
+ * Permission: Owner of theme | MANAGE_ALL_CONTENT (enforced in controller)
+ */
+router.put('/themes/:id',
+    authMiddleware.verifyToken(),
+    validateRequest(themeSchemas.themeId, 'params'),
+    validateRequest(themeSchemas.updateTheme),
+    clearCache((req) => ['themes:public:*', `theme:${req.params.id}`]),
+    appController.updateTheme
+);
+
+/**
+ * Delete Theme:
+ * Route Definition: DELETE /api/v1/themes/:id
+ * Permission: Owner of theme | MANAGE_ALL_CONTENT (enforced in controller)
+ */
+router.delete('/themes/:id',
+    authMiddleware.verifyToken(),
+    validateRequest(themeSchemas.themeId, 'params'),
+    clearCache((req) => ['themes:public:*', `theme:${req.params.id}`]),
+    appController.deleteTheme
+);
+
+/**
+ * Fork Theme:
+ * Route Definition: POST /api/v1/themes/:id/fork
+ * Permission: CREATE_CONTENT (CREATOR and above)
+ */
+router.post('/themes/:id/fork',
+    authMiddleware.verifyToken(),
+    validateRequest(themeSchemas.themeId, 'params'),
+    authMiddleware.checkPermission(RIGHTS.CREATE_CONTENT),
+    appController.forkTheme
 );
 
 export default router;

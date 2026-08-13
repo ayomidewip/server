@@ -81,7 +81,7 @@ const TOKEN_COOKIE_OPTIONS = {
 };
 
 // Token lifetimes from env – single source of truth for TTL defaults below.
-const REFRESH_TOKEN_EXPIRY_S = parseExpiryToSeconds(process.env.REFRESH_TOKEN_EXPIRY || '7d');
+const REFRESH_TOKEN_EXPIRY_S = parseExpiryToSeconds(process.env.REFRESH_TOKEN_EXPIRY);
 
 /**
  * Generate a unique token family ID for refresh token chains
@@ -196,154 +196,95 @@ const hashToken = (token) => {
 };
 
 /**
- * Helper function to normalize user roles
- * @param {String|Array} roles - User roles
- * @returns {Array} - Normalized roles array
+ * Validate a JWT token string and return the authenticated user.
+ * Pure async function — no Express req/res dependency.
+ * Used by both the Express middleware and WebSocket authentication.
+ *
+ * @param {string} token - Raw JWT string
+ * @param {string} tokenType - 'access' or 'refresh'
+ * @returns {Promise<object>} Decoded user with normalized roles
+ * @throws {{ status: number, message: string }} on any auth failure
  */
+const validateToken = async (token, tokenType = 'access') => {
+    if (!token) {
+        throw { status: 401, message: 'Unauthorized: Authentication required' };
+    }
+
+    const secret = tokenType === 'refresh'
+        ? process.env.REFRESH_TOKEN_SECRET
+        : process.env.ACCESS_TOKEN_SECRET;
+
+    // Promisify jwt.verify
+    const decoded = await new Promise((resolve, reject) => {
+        jwt.verify(token, secret, (err, payload) => {
+            if (err) reject(err);
+            else resolve(payload);
+        });
+    }).catch(err => {
+        throw { status: 403, message: 'Invalid or expired token', cause: err };
+    });
+
+    // Check required structure
+    if (!decoded.id || !decoded.username || !decoded.email) {
+        throw { status: 500, message: 'Server error during authentication' };
+    }
+
+    // Check blacklist (fail-open if cache is unavailable)
+    try {
+        const isBlacklisted = await cache.get(`auth:blacklist:${token}`);
+        if (isBlacklisted) {
+            throw { status: 401, message: 'Token has been revoked' };
+        }
+    } catch (err) {
+        if (err.status) throw err; // re-throw our own errors
+        logger.error(`${logger.safeColor(logger.colors.red)}[Auth]${logger.safeColor(logger.colors.reset)} Cache error during blacklist check:`, {
+            message: err.message, error: err
+        });
+    }
+
+    // Check user is still active
+    const user = await User.findById(decoded.id).select('+active');
+    if (!user) {
+        throw { status: 401, message: 'User not found' };
+    }
+    if (user.active === false) {
+        throw { status: 401, message: 'Account is deactivated' };
+    }
+    if (user.changedPasswordAfter && user.changedPasswordAfter(decoded.iat)) {
+        throw { status: 401, message: 'Password changed. Please log in again.' };
+    }
+
+    return { ...decoded, roles: normalizeRoles(decoded.roles) };
+};
+
 /**
- * Middleware to verify JWT tokens
+ * Express middleware to verify JWT tokens from cookies.
+ * Wraps validateToken with req/res/next handling.
  * @param {string} tokenType - Type of token (access or refresh)
  * @returns {Function} - Express middleware
  */
-const verifyToken = (tokenType = 'access') => (req, res, next) => {
+const verifyToken = (tokenType = 'access') => async (req, res, next) => {
+    const cookieName = tokenType === 'refresh' ? 'refreshToken' : 'accessToken';
+    const token = req.cookies?.[cookieName];
+
     try {
-        // Get token from cookies only - no backwards compatibility with headers
-        const cookieName = tokenType === 'refresh' ? 'refreshToken' : 'accessToken';
-        const token = req.cookies?.[cookieName];
-        
-        if (!token) {
-            logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Unauthorized: Token cookie missing`, {
-                ip: req.ip,
-                originalUrl: req.originalUrl,
-                cookieName,
-                tokenType,
-                hasCookies: !!req.cookies
+        req.user = await validateToken(token, tokenType);
+        next();
+    } catch (err) {
+        const status = err.status || 500;
+        const message = err.message || 'Server error during authentication';
+
+        if (status >= 500) {
+            logger.error(`${logger.safeColor(logger.colors.red)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} ${message}`, {
+                tokenType, ip: req.ip, originalUrl: req.originalUrl, error: err.cause || err
             });
-            return res.status(401).json({
-                success: false,
-                message: 'Unauthorized: Authentication required'
+        } else {
+            logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} ${message}`, {
+                tokenType, ip: req.ip, originalUrl: req.originalUrl
             });
         }
 
-        const secret = tokenType === 'refresh'
-            ? process.env.REFRESH_TOKEN_SECRET
-            : process.env.ACCESS_TOKEN_SECRET;
-            
-        jwt.verify(token, secret, async (err, decoded) => {
-            if (err) {
-                logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Invalid or expired token`, {
-                    error: err.message,
-                    tokenType,
-                    ip: req.ip
-                });
-                return res.status(403).json({
-                    success: false,
-                    message: 'Invalid or expired token'
-                });
-            }
-
-            // Check if decoded token has required structure
-            if (!decoded.id || !decoded.username || !decoded.email) {
-                logger.error(`${logger.safeColor(logger.colors.red)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Malformed token payload - missing required fields`, {
-                    decoded,
-                    tokenType,
-                    ip: req.ip
-                });
-                return res.status(500).json({
-                    success: false,
-                    message: 'Server error during authentication'
-                });
-            }
-            // Check if token is blacklisted (logged out)
-            try {
-                const isBlacklisted = await cache.get(`auth:blacklist:${token}`);
-                if (isBlacklisted) {
-                    logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Token is blacklisted (logged out)`, {
-                        userId: decoded.id,
-                        tokenType,
-                        ip: req.ip
-                    });
-                    return res.status(401).json({
-                        success: false,
-                        message: 'Token has been revoked'
-                    });
-                }
-            } catch (cacheError) {
-                logger.error(`${logger.safeColor(logger.colors.red)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Cache error during blacklist check:`, {
-                    message: cacheError.message,
-                    error: cacheError
-                });
-                // Continue with authentication even if cache fails (fail-open for availability)
-                // In production, you might want to fail-closed for maximum security
-            }
-
-            // Check if user is still active in the database
-            try {
-                const user = await User.findById(decoded.id).select('+active');
-                if (!user) {
-                    logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} User not found`, {
-                        userId: decoded.id,
-                        tokenType,
-                        ip: req.ip
-                    });
-                    return res.status(401).json({
-                        success: false,
-                        message: 'User not found'
-                    });
-                }
-
-                if (user.active === false) {
-                    logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Account is deactivated`, {
-                        userId: decoded.id,
-                        tokenType,
-                        ip: req.ip
-                    });
-                    return res.status(401).json({
-                        success: false,
-                        message: 'Account is deactivated'
-                    });
-                }
-
-                // Check if password was changed after token was issued
-                if (user.changedPasswordAfter && user.changedPasswordAfter(decoded.iat)) {
-                    logger.warn(`${logger.safeColor(logger.colors.yellow)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Password changed after token issued`, {
-                        userId: decoded.id,
-                        tokenType,
-                        ip: req.ip
-                    });
-                    return res.status(401).json({
-                        success: false,
-                        message: 'Password changed. Please log in again.'
-                    });
-                }
-            } catch (dbError) {
-                logger.error(`${logger.safeColor(logger.colors.red)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Database error during user active check:`, {
-                    message: dbError.message,
-                    error: dbError
-                });
-                return res.status(500).json({
-                    success: false,
-                    message: 'Server error during authentication'
-                });
-            }
-
-            // Store decoded user data in request object with normalized roles
-            req.user = {
-                ...decoded,
-                roles: normalizeRoles(decoded.roles)
-            };
-            next();
-        });
-    } catch (error) {
-        logger.error(`${logger.safeColor(logger.colors.red)}[Auth Middleware]${logger.safeColor(logger.colors.reset)} Auth middleware error:`, {
-            message: error.message,
-            stack: error.stack,
-            error
-        });
-        res.status(500).json({
-            success: false,
-            message: 'Server error during authentication'
-        });
+        res.status(status).json({ success: false, message });
     }
 };
 
@@ -507,82 +448,59 @@ const optionalAuth = (options = {}) => {
 };
 
 /**
- * WebSocket Authentication helper - leverages existing HTTP auth middleware
+ * Authenticate a WebSocket upgrade request.
+ * Extracts tokens from cookies or URL query params and validates directly
+ * via validateToken — no Express middleware adapter needed.
+ *
  * @param {WebSocket} ws - WebSocket connection
- * @param {Object} req - WebSocket request object
- * @returns {Promise<Object>} - Authenticated user object
+ * @param {Object} req - HTTP upgrade request
+ * @returns {Promise<Object>} Authenticated user object
  */
 const authenticateWebSocket = async (ws, req) => {
     try {
-        // Parse cookies and attach to fake req object to reuse existing middleware
-        if (req.headers.cookie) {
-            const rawCookies = cookie.parse(req.headers.cookie);
-            const jsonCookies = cookieParserLib.JSONCookies(rawCookies);
-            req.cookies = { ...rawCookies, ...jsonCookies };
-        } else {
-            req.cookies = {};
-        }
-        
-        // TEMPORARY: Support URL token for existing connections (will be removed)
-        // Parse URL parameters as fallback for backwards compatibility
+        // Parse cookies from the upgrade request
+        const cookies = req.headers.cookie
+            ? { ...cookie.parse(req.headers.cookie), ...cookieParserLib.JSONCookies(cookie.parse(req.headers.cookie)) }
+            : {};
+
+        // URL token fallback (for y-websocket params)
         const parsedUrl = parseUrl(req.url, true);
         const urlToken = parsedUrl.query.token;
-        
-        // If no cookies but URL token exists, temporarily set it as cookie for validation
-        if (!req.cookies.accessToken && !req.cookies.refreshToken && urlToken) {
-            logger.warn('WebSocket: Using URL token (DEPRECATED - will be removed)', { tokenLength: urlToken.length });
-            // Temporarily set as cookie for existing middleware to process
-            req.cookies.accessToken = urlToken;
+
+        // Collect candidate tokens in priority order
+        const candidates = [
+            { token: cookies.accessToken, type: 'access', source: 'cookie' },
+            { token: urlToken,            type: 'access', source: 'url' },
+            { token: cookies.refreshToken, type: 'refresh', source: 'cookie' },
+        ].filter(c => c.token);
+
+        let lastError;
+        for (const { token, type, source } of candidates) {
+            try {
+                const user = await validateToken(token, type);
+                ws.user = user;
+                logger.info(`🔌 Authenticated WebSocket connection for user ${user.username} (${user.id}) via ${source} ${type} token`);
+                return user;
+            } catch (err) {
+                lastError = err;
+            }
         }
 
-        // Create promise to capture the middleware result
-        return new Promise((resolve, reject) => {
-            // Mock res object for middleware
-            const mockRes = {
-                status: () => mockRes,
-                json: (data) => {
-                    const error = new Error(data.message || 'Authentication failed');
-                    error.statusCode = 401;
-                    reject(error);
-                }
-            };
-
-            // Try access token first
-            const accessMiddleware = verifyToken('access');
-            accessMiddleware(req, mockRes, (err) => {
-                if (err || !req.user) {
-                    // Access token failed, try refresh token
-                    const refreshMiddleware = verifyToken('refresh');
-                    refreshMiddleware(req, mockRes, (refreshErr) => {
-                        if (refreshErr || !req.user) {
-                            const closeReason = 'Token expired';
-                            logger.warn('WebSocket: Authentication failed - no valid tokens', {
-                                url: req.url,
-                                origin: req.headers.origin,
-                                hasCookies: !!req.headers.cookie,
-                                hasUrlToken: !!urlToken,
-                                userAgent: req.headers['user-agent']
-                            });
-                            ws.close(1008, closeReason);
-                            reject(new Error(closeReason));
-                        } else {
-                            // Success with refresh token
-                            ws.user = req.user;
-                            logger.info(`🔌 Authenticated WebSocket connection for user ${req.user.username} (${req.user.id})`);
-                            resolve(req.user);
-                        }
-                    });
-                } else {
-                    // Success with access token
-                    ws.user = req.user;
-                    logger.info(`🔌 Authenticated WebSocket connection for user ${req.user.username} (${req.user.id})`);
-                    resolve(req.user);
-                }
-            });
+        // All candidates exhausted
+        const reason = lastError?.message || 'Authentication failed';
+        logger.warn('WebSocket: Authentication failed - no valid tokens', {
+            url: req.url,
+            origin: req.headers.origin,
+            hasCookies: !!req.headers.cookie,
+            hasUrlToken: !!urlToken,
+            userAgent: req.headers['user-agent']
         });
+        ws.close(1008, reason);
+        throw new Error(reason);
     } catch (error) {
-        logger.error('WebSocket authentication error:', error);
-        ws.close(1008, 'Authentication failed');
+        if (ws.readyState === ws.OPEN) {
+            ws.close(1008, 'Authentication failed');
+        }
         throw error;
     }
 };

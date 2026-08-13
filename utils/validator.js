@@ -146,10 +146,10 @@ const customJoi = JoiBase.extend((joi) => ({
     }
 }));
 
-export const objectId = customJoi.objectId;
+export const objectId = () => customJoi.objectId();
 export const password = () => customJoi.password().complexity();
-export const futureDate = customJoi.futureDate;
-export const filePath = customJoi.filePath;
+export const futureDate = () => customJoi.futureDate();
+export const filePath = () => customJoi.filePath();
 export const phoneNumber = customJoi.string().custom(joiHelpers.phoneNumber, 'phone number validation');
 export const positiveNumber = customJoi.number().custom(joiHelpers.positiveNumber, 'positive number validation');
 export const Joi = customJoi;

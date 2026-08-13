@@ -104,13 +104,11 @@ const logSchema = new mongoose.Schema({
 });
 
 // Pre-save middleware to add real-time data
-logSchema.pre('save', function (next) {
+logSchema.pre('save', function () {
     // Ensure operation type is inferred from method
     if (this.method && !this.operationType) {
         this.operationType = determineOperationType(this.method);
     }
-
-    next();
 });
 
 // Post-save middleware for cache invalidation and real-time updates
@@ -261,8 +259,7 @@ logSchema.statics.getLogs = async function (filters = {}, options = {}) {
 };
 
 // Export model with added utility functions
-// Check if model exists to prevent recompilation errors in tests
-const Log = mongoose.models.Log || mongoose.model('Log', logSchema);
+const Log = mongoose.model('Log', logSchema);
 
 // Attach utility functions to the model
 Log.determineOperationType = determineOperationType;

@@ -312,12 +312,12 @@ export const hashPassword = asyncHandler(async (req, res, next) => {
 
     // Hash newPassword for password change operations
     if (req.body.newPassword) {
-        const salt = await bcrypt.genSalt(12);
+        const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_ROUNDS));
         req.body.password = await bcrypt.hash(req.body.newPassword, salt);
     }
     // Hash password for user creation/update operations
     else if (req.body.password) {
-        const salt = await bcrypt.genSalt(12);
+        const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_ROUNDS));
         req.body.password = await bcrypt.hash(req.body.password, salt);
     }
 

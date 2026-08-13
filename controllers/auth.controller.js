@@ -242,7 +242,7 @@ const sendNewDeviceLoginEmail = async (user, deviceInfo, transporter = null) => 
             device: deviceInfo.platform || 'Unknown',
             browser: deviceInfo.browser ? `${deviceInfo.browser} on ${deviceInfo.os || 'Unknown OS'}` : null,
             appUrl: process.env.APP_URL,
-            appName: process.env.APP_NAME || 'App Base'
+            appName: process.env.APP_NAME
         }
     }, transporter);
 };
@@ -304,7 +304,7 @@ const authController = {
             }
 
             // Hash the password (password validation already done by middleware)
-            const hashedPassword = await bcrypt.hash(password, 12);
+            const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS));
 
             // Process roles with approval logic
             const roleProcessing = processRolesWithApproval(
@@ -729,8 +729,6 @@ const authController = {
 
             // Generate new tokens with the SAME family ID (rotation within family)
             const tokens = generateTokens(user, familyId);
-            // Reset the family TTL so it never expires before the new refresh token cookie does.
-            await storeTokenFamily(tokens.familyId, user.id);
             await cacheUserSession(user.id, tokens.accessToken); // Cache the new session
 
             // Track user device for token refresh
@@ -916,7 +914,7 @@ const authController = {
             user.addPasswordToHistory(user.password);
 
             // Set new password and clear reset token fields
-            user.password = await bcrypt.hash(password, 12);
+            user.password = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS));
             user.passwordResetToken = undefined;
             user.passwordResetExpires = undefined;
             user.passwordChangedAt = Date.now();

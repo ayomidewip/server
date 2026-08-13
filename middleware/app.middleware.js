@@ -34,9 +34,7 @@ const asyncHandler = (fn) => (req, res, next) => {
 };
 
 // Create Redis client with default settings
-let redisClient;
-
-redisClient = redis.createClient({
+const redisClient = redis.createClient({
     url: process.env.REDIS_URL,
     socket: {
         reconnectStrategy: (retries) => Math.min(retries * 50, 500)

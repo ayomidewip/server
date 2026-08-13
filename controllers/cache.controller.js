@@ -47,7 +47,7 @@ class CacheCleanupService {
         }
 
         // Check if cleanup is enabled
-        const isEnabled = process.env.CACHE_CLEANUP_ENABLED !== 'false';
+        const isEnabled = process.env.CACHE_CLEANUP_ENABLED === 'true';
         if (!isEnabled) {
             logger.info('[CacheCleanup] Cache cleanup disabled via environment variable');
             return;
@@ -92,7 +92,7 @@ class CacheCleanupService {
      */
     getStats() {
         return {
-            enabled: process.env.CACHE_CLEANUP_ENABLED !== 'false',
+            enabled: process.env.CACHE_CLEANUP_ENABLED === 'true',
             isRunning: this.isRunning,
             intervalHours: cleanupIntervalHours,
             minAgeHours: cleanupMinAgeHours,

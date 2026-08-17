@@ -32,6 +32,7 @@ const formatUserResponse = (user) => {
         id: user._id || user.id,
         firstName: user.firstName,
         lastName: user.lastName,
+        bio: user.bio || '',
         username: user.username,
         email: user.email,
         roles: roles,
@@ -400,7 +401,7 @@ const userController = {
                 });
             }
 
-            const allowedFields = ['firstName', 'lastName', 'email', 'username', 'profilePhoto'];
+            const allowedFields = ['firstName', 'lastName', 'bio', 'email', 'username', 'profilePhoto'];
             if (hasRight(req.user.roles, RIGHTS.MANAGE_ALL_USERS)) {
                 allowedFields.push('roles', 'active');
             }

@@ -80,7 +80,10 @@ router.post('/logout',
 router.get('/me',
     authMiddleware.verifyToken(),
     cacheResponse(1800, (req) => `user:profile:${req.user.id}`), // Cache for 30 minutes
-    (req, res) => {
+    async (req, res) => {
+        // Bio lives only in the DB, not in the JWT claims
+        const User = (await import('../models/user.model.js')).default;
+        const dbUser = await User.findById(req.user.id).select('bio').lean();
         // Use formatUserResponse for consistent response structure
         // Format user response directly (internal formatting logic)
         const formattedUser = {
@@ -88,6 +91,7 @@ router.get('/me',
                 id: req.user.id,
                 firstName: req.user.firstName,
                 lastName: req.user.lastName,
+                bio: dbUser?.bio || '',
                 username: req.user.username,
                 email: req.user.email,
                 roles: req.user.roles,

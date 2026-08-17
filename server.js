@@ -230,6 +230,10 @@ class Server {
     async connectDatabase() {
         try {
             this.dbConnection = await connectDB();
+
+            const {seedPresetThemes} = await import('./config/preset.themes.js');
+            await seedPresetThemes();
+
             return this.dbConnection;
         } catch (error) {
             logger.error('Failed to connect to database:', error);

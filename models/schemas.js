@@ -44,7 +44,9 @@ export const authSchemas = {
             }), password: Joi.string().required()
             .messages({
                 'string.empty': 'Password is required', 'any.required': 'Password is required'
-            })
+            }),
+        // TOTP code or backup code for accounts with 2FA enabled
+        twoFactorToken: Joi.string().min(6).max(20)
     }),
 
     forgotPassword: Joi.object({
@@ -105,6 +107,7 @@ export const userSchemas = {
     }), updateUser: Joi.object({
         firstName: Joi.string().min(2).max(50),
         lastName: Joi.string().min(2).max(50),
+        bio: Joi.string().allow('').max(300),
         username: Joi.string().min(3).max(30).pattern(/^[a-zA-Z0-9_]+$/),
         email: Joi.string().email(),
         profilePhoto: Joi.string(),

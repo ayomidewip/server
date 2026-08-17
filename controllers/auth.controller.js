@@ -152,6 +152,7 @@ const formatUserResponse = (user) => {
         id: user.id,
         firstName: user.firstName,
         lastName: user.lastName,
+        bio: user.bio || '',
         username: user.username,
         email: user.email,
         roles: normalizeRoles(user.roles),
